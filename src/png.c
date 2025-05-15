@@ -37,6 +37,8 @@ typedef struct {
   uint16_t a;
 } PIXEL16;
 
+uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c);
+
 PIXEL *allocate_PIXELs(PNG_IHDR *hdr) {
   size_t num_pixels = hdr->height * hdr->width;
   PIXEL *pixels = calloc(num_pixels, sizeof(PIXEL));
@@ -569,6 +571,26 @@ int decompress_pixels(const unsigned char *compressed_data,
   return Z_OK;
 }
 
+/**
+ * a = left, b = up, c = up left
+ **/
+uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c) {
+  int aa = a;
+  int bb = b;
+  int cc = c;
+  int p = aa + bb - cc;
+  int pa = abs(p - aa);
+  int pb = abs(p - bb);
+  int pc = abs(p - cc);
+  if (pa <= pb && pa <= pc) {
+    return a;
+  }
+  if (pb <= pc) {
+    return b;
+  }
+  return c;
+}
+
 int get_RGBA_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
                     PIXEL *pixels) {
   // four bytes per pixel
@@ -585,8 +607,95 @@ int get_RGBA_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
         pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3];
       }
       break;
+    case 1:
+      for (int j = 0; j < hdr->width; j++) {
+        if (j == 0) {
+          pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
+          pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
+          pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2];
+          pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3];
+          continue;
+        }
+        pixels[hdr->width * i + j].r =
+            data[offset * i + j * 4 + 1] + pixels[hdr->width * i + j - 1].r;
+        pixels[hdr->width * i + j].g =
+            data[offset * i + j * 4 + 1 + 1] + pixels[hdr->width * i + j - 1].g;
+        pixels[hdr->width * i + j].b =
+            data[offset * i + j * 4 + 1 + 2] + pixels[hdr->width * i + j - 1].b;
+        pixels[hdr->width * i + j].a =
+            data[offset * i + j * 4 + 1 + 3] + pixels[hdr->width * i + j - 1].a;
+      }
+      break;
+    case 2:
+      for (int j = 0; j < hdr->width; j++) {
+        if (i == 0) {
+          pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
+          pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
+          pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2];
+          pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3];
+          continue;
+        }
+        pixels[hdr->width * i + j].r =
+            data[offset * i + j * 4 + 1] + pixels[hdr->width * (i - 1) + j].r;
+        pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1] +
+                                       pixels[hdr->width * (i - 1) + j].g;
+        pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2] +
+                                       pixels[hdr->width * (i - 1) + j].b;
+        pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3] +
+                                       pixels[hdr->width * (i - 1) + j].a;
+      }
+      break;
+    case 4:
+      for (int j = 0; j < hdr->width; j++) {
+        if (i == 0 && j == 0) {
+          pixels[0].r = data[1];
+          pixels[0].g = data[2];
+          pixels[0].b = data[3];
+          pixels[0].a = data[4];
+          continue;
+        }
+        if (i == 0) {
+          uint8_t pr = PaethPredictor(pixels[j - 1].r, 0, 0);
+          uint8_t pg = PaethPredictor(pixels[j - 1].g, 0, 0);
+          uint8_t pb = PaethPredictor(pixels[j - 1].b, 0, 0);
+          uint8_t pa = PaethPredictor(pixels[j - 1].a, 0, 0);
+          pixels[j].r = data[j * 4 + 1] + pr;
+          pixels[j].g = data[j * 4 + 1 + 1] + pg;
+          pixels[j].b = data[j * 4 + 1 + 2] + pb;
+          pixels[j].a = data[j * 4 + 1 + 3] + pa;
+          continue;
+        }
+        if (j == 0) {
+          uint8_t pr = PaethPredictor(0, pixels[hdr->width * (i - 1)].r, 0);
+          uint8_t pg = PaethPredictor(0, pixels[hdr->width * (i - 1)].g, 0);
+          uint8_t pb = PaethPredictor(0, pixels[hdr->width * (i - 1)].b, 0);
+          uint8_t pa = PaethPredictor(0, pixels[hdr->width * (i - 1)].a, 0);
+          pixels[hdr->width * i].r = data[offset * i + 1] + pr;
+          pixels[hdr->width * i].g = data[offset * i + 1 + 1] + pg;
+          pixels[hdr->width * i].b = data[offset * i + 1 + 2] + pb;
+          pixels[hdr->width * i].a = data[offset * i + 1 + 3] + pa;
+          continue;
+        }
+        uint8_t pr = PaethPredictor(pixels[hdr->width * i + j - 1].r,
+                                    pixels[hdr->width * (i - 1) + j].r,
+                                    pixels[hdr->width * (i - 1) + j - 1].r);
+        uint8_t pg = PaethPredictor(pixels[hdr->width * i + j - 1].g,
+                                    pixels[hdr->width * (i - 1) + j].g,
+                                    pixels[hdr->width * (i - 1) + j - 1].g);
+        uint8_t pb = PaethPredictor(pixels[hdr->width * i + j - 1].b,
+                                    pixels[hdr->width * (i - 1) + j].b,
+                                    pixels[hdr->width * (i - 1) + j - 1].b);
+        uint8_t pa = PaethPredictor(pixels[hdr->width * i + j - 1].a,
+                                    pixels[hdr->width * (i - 1) + j].a,
+                                    pixels[hdr->width * (i - 1) + j - 1].a);
+        pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1] + pr;
+        pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1] + pg;
+        pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2] + pb;
+        pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3] + pa;
+      }
+      break;
     default:
-      printf("Filter type not yet implemented.\n");
+      printf("Filter type not yet implemented: %d\n", filter_type);
       return 1;
       break;
     }

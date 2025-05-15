@@ -1,3 +1,4 @@
+#include "image.h"
 #include "png.h"
 
 int main(int argc, char **argv) {
@@ -21,11 +22,18 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  print_pixel(png->pixels[0]);
+  uint32_t width = png->header->width;
+  uint32_t height = png->header->height;
 
-	uint32_t width = png->header->width;
-	uint32_t height = png->header->height;
+  for (int i = 0; i < width * height; i++) {
+    if (png->pixels[i].r != 0xff || png->pixels[i].g != 0xff ||
+        png->pixels[i].b != 0xff) {
+      printf("Non-white pixel found! Pixel number %d\n", i);
+      break;
+    }
+  }
 
+	print_pixel(png->pixels[6686]);
 
   Display *d;
   Window w;
@@ -35,16 +43,16 @@ int main(int argc, char **argv) {
   d = XOpenDisplay(NULL);
   if (d == NULL) {
     fprintf(stderr, "Cannot open display\n");
+    free_PNG(png);
     fclose(f);
     exit(1);
   }
 
   s = DefaultScreen(d);
-  w = XCreateSimpleWindow(d, RootWindow(d, s), 10, 10, width,
-                          height, 1, BlackPixel(d, s),
-                          BlackPixel(d, s));
+  w = XCreateSimpleWindow(d, RootWindow(d, s), 10, 10, width, height, 1,
+                          BlackPixel(d, s), BlackPixel(d, s));
 
-  XStoreName(d, w, "PNGER");
+  XStoreName(d, w, "PNGER v 0.01");
   XSelectInput(d, w, ExposureMask | KeyPressMask);
   XMapWindow(d, w);
 
@@ -55,13 +63,13 @@ int main(int argc, char **argv) {
   XColor color;
   Colormap colormap = DefaultColormap(d, 0);
   XAllocNamedColor(d, colormap, "red", &color, &color);
+  XImage *img = create_img(d, s, png);
   while (1) {
     XNextEvent(d, &e);
     if (e.type == Expose) {
       XSetForeground(d, gc, BlackPixel(d, s));
       XFillRectangle(d, w, gc, 0, 0, width, height);
-      XSetForeground(d, gc, color.pixel);
-      XDrawLine(d, w, gc, 20, 20, 100, 100);
+      XPutImage(d, w, gc, img, 0, 0, 0, 0, width, height);
     }
     if (e.type == KeyPress) {
       break;
@@ -73,6 +81,7 @@ int main(int argc, char **argv) {
     }
   }
 
+  XDestroyImage(img);
   XFreeGC(d, gc);
   XDestroyWindow(d, w);
   XCloseDisplay(d);
