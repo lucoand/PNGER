@@ -25,16 +25,6 @@ int main(int argc, char **argv) {
   uint32_t width = png->header->width;
   uint32_t height = png->header->height;
 
-  for (int i = 0; i < width * height; i++) {
-    if (png->pixels[i].r != 0xff || png->pixels[i].g != 0xff ||
-        png->pixels[i].b != 0xff) {
-      printf("Non-white pixel found! Pixel number %d\n", i);
-      break;
-    }
-  }
-
-	print_pixel(png->pixels[6686]);
-
   Display *d;
   Window w;
   XEvent e;
@@ -60,9 +50,9 @@ int main(int argc, char **argv) {
   XSetWMProtocols(d, w, &delWindow, 1);
 
   GC gc = XCreateGC(d, w, 0, NULL);
-  XColor color;
-  Colormap colormap = DefaultColormap(d, 0);
-  XAllocNamedColor(d, colormap, "red", &color, &color);
+  // XColor color;
+  // Colormap colormap = DefaultColormap(d, 0);
+  // XAllocNamedColor(d, colormap, "red", &color, &color);
   XImage *img = create_img(d, s, png);
   while (1) {
     XNextEvent(d, &e);
@@ -72,7 +62,10 @@ int main(int argc, char **argv) {
       XPutImage(d, w, gc, img, 0, 0, 0, 0, width, height);
     }
     if (e.type == KeyPress) {
-      break;
+      KeySym key = XLookupKeysym(&e.xkey, 0);
+      if (key == XK_Escape) {
+        break;
+      }
     }
     if (e.type == ClientMessage) {
       if ((Atom)e.xclient.data.l[0] == delWindow) {

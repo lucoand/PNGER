@@ -463,8 +463,9 @@ PixelFormat get_pixel_format(PNG_IHDR *hdr) {
 }
 
 size_t get_buffer_size(uint32_t height, uint32_t width, uint8_t bit_depth,
-                       PixelFormat pixel_format) {
+                       PixelFormat pixel_format, size_t *bytes_per_row) {
   int samples_per_pixel;
+  size_t buffer_size;
   switch (pixel_format) {
   case GS:
     samples_per_pixel = 1;
@@ -473,7 +474,9 @@ size_t get_buffer_size(uint32_t height, uint32_t width, uint8_t bit_depth,
     samples_per_pixel = 3;
     break;
   case PALETTE:
-    samples_per_pixel = 1;
+    *bytes_per_row = width + 1;
+    buffer_size = height * (width + 1);
+    return buffer_size;
     break;
   case GSA:
     samples_per_pixel = 2;
@@ -485,35 +488,28 @@ size_t get_buffer_size(uint32_t height, uint32_t width, uint8_t bit_depth,
     return 0;
     break;
   }
-  size_t buffer_size;
-  if (pixel_format == PALETTE) {
-    // 1 byte per pixel + 1 byte per scanline
-    buffer_size = height * (width + 1);
-    return buffer_size;
-  }
-  size_t bytes_per_row;
   switch (bit_depth) {
   case 16:
-    bytes_per_row = width * samples_per_pixel * 2 + 1;
+    *bytes_per_row = width * samples_per_pixel * 2 + 1;
     break;
   case 8:
-    bytes_per_row = width * samples_per_pixel + 1;
+    *bytes_per_row = width * samples_per_pixel + 1;
     break;
   case 4:
-    bytes_per_row = (size_t)ceil((double)width / 2) + 1;
+    *bytes_per_row = (size_t)ceil((double)width / 2) + 1;
     break;
   case 2:
-    bytes_per_row = (size_t)ceil((double)width / 4) + 1;
+    *bytes_per_row = (size_t)ceil((double)width / 4) + 1;
     break;
   case 1:
-    bytes_per_row = (size_t)ceil((double)width / 8) + 1;
+    *bytes_per_row = (size_t)ceil((double)width / 8) + 1;
     break;
   default:
     return 0;
     break;
   }
 
-  buffer_size = height * bytes_per_row;
+  buffer_size = height * *bytes_per_row;
   // printf("buffer_size within get_buffer_size: %zu\n", buffer_size);
   return buffer_size;
 }
@@ -533,31 +529,19 @@ void test_uncompress(void) {
 
 int decompress_pixels(const unsigned char *compressed_data,
                       size_t compressed_size, PNG_IHDR *hdr, uint8_t **out_data,
-                      size_t *out_size) {
+                      size_t *out_size, size_t *bytes_per_row) {
   if (!compressed_data || !hdr || !out_data || !out_size) {
     printf("Null pointer passed to decompress pixels.\n");
     return -1;
   }
   size_t buffer_size = get_buffer_size(hdr->height, hdr->width, hdr->bit_depth,
-                                       hdr->pixel_format);
-  // printf("zlib version: %s\n", zlibVersion());
-  // printf("First 4 bytes of compressed data: %02x %02x %02x %02x\n",
-  //        compressed_data[0], compressed_data[1], compressed_data[2],
-  //        compressed_data[3]);
+                                       hdr->pixel_format, bytes_per_row);
   *out_data = malloc(buffer_size);
   if (!*out_data) {
     fprintf(stderr, "malloc failed for buffer size %zu\n", buffer_size);
     return -1;
   }
 
-  // fprintf(stderr, "Before uncompress:\n");
-  // fprintf(stderr, "  compressed_data: %p\n", (void *)compressed_data);
-  // fprintf(stderr, "  compressed_size: %zu\n", compressed_size);
-  // fprintf(stderr, "  out_data: %p\n", (void *)*out_data);
-  // fprintf(stderr, "  buffer_size: %zu\n", buffer_size);
-  //
-  // fprintf(stderr, "Calling uncompress...\n");
-  // fflush(stderr);
   int z_result =
       uncompress(*out_data, &buffer_size, compressed_data, compressed_size);
   if (z_result != Z_OK) {
@@ -591,8 +575,7 @@ uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c) {
   return c;
 }
 
-int get_RGBA_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
-                    PIXEL *pixels) {
+int get_RGBA_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
   // four bytes per pixel
   uint8_t *data = *out_data;
   size_t offset = hdr->width * 4 + 1;
@@ -703,8 +686,7 @@ int get_RGBA_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
   return 0;
 }
 
-int get_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
-               PIXEL *pixels) {
+int get_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
   if (!out_data || !hdr || !pixels) {
     fprintf(stderr, "Null pointer passed into get_pixels.\n");
     return 1;
@@ -712,7 +694,7 @@ int get_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
   switch (hdr->pixel_format) {
   case RGBA:
     if (hdr->bit_depth == 8) {
-      if (get_RGBA_pixels(out_data, out_size, hdr, pixels) == 0) {
+      if (get_RGBA_pixels(out_data, hdr, pixels) == 0) {
         return 0;
       } else {
         printf("Couldn't get pixels.\n");
@@ -727,7 +709,7 @@ int get_pixels(uint8_t **out_data, size_t out_size, PNG_IHDR *hdr,
     return 1;
     break;
   default:
-    printf("Pixel format not yet implemented.\n");
+    printf("Pixel format not yet implemented: %d\n", hdr->pixel_format);
     return 1;
     break;
   }
@@ -864,9 +846,10 @@ PNG *decode_PNG(FILE *f) {
   }
   // printf("Offset after concatenating compressed data: %d\n", offset);
   size_t out_size = 0;
+  size_t bytes_per_row = 0;
   uint8_t *out_data;
   if (decompress_pixels(compressed_data, num_bytes, hdr_data, &out_data,
-                        &out_size) != Z_OK) {
+                        &out_size, &bytes_per_row) != Z_OK) {
     printf("decompress_pixels failed\n");
     free(compressed_data);
     compressed_data = NULL;
@@ -877,6 +860,7 @@ PNG *decode_PNG(FILE *f) {
     return NULL;
   }
 
+  // printf("Bytes per row: %zu\n", bytes_per_row);
   // printf("Uncompressed data size: %zu\n", out_size);
 
   free(compressed_data);
@@ -895,7 +879,7 @@ PNG *decode_PNG(FILE *f) {
     return NULL;
   }
   // printf("out_data before get_pixels: %p\n", out_data);
-  int pixel_result = get_pixels(&out_data, out_size, hdr_data, pixels);
+  int pixel_result = get_pixels(&out_data, hdr_data, pixels);
   if (pixel_result == 1) {
     if (pixels) {
       free(pixels);
@@ -938,254 +922,4 @@ PNG *decode_PNG(FILE *f) {
   free_chunks(chunks, num_chunks);
   chunks = NULL;
   return png;
-}
-
-// int main(int argc, char **argv) {
-//   if (argc < 2) {
-//     printf("Too few arguments\n");
-//     return 1;
-//   }
-//   if (argc > 2) {
-//     printf("Too many arguments\n");
-//     return 1;
-//   }
-//   // printf("%s\n", argv[1]);
-//   FILE *f = fopen(argv[1], "rb");
-//   if (!f) {
-//     perror("fopen");
-//     return 1;
-//   }
-//
-//   PNG *png = decode_PNG(f);
-//
-//   print_pixel(png->pixels[0]);
-//   printf("Width: %d\nHeight: %d\n", png->header->width, png->header->height);
-//
-//   free_PNG(png);
-//   fclose(f);
-//   return 0;
-// }
-
-int dummy(int argc, char **argv) {
-  if (argc < 2) {
-    printf("Too few arguments\n");
-    return 1;
-  }
-  if (argc > 2) {
-    printf("Too many arguments\n");
-    return 1;
-  }
-  // printf("%s\n", argv[1]);
-  FILE *f = fopen(argv[1], "rb");
-  if (!f) {
-    perror("fopen");
-    return 1;
-  }
-  // Apparently the minimum possible size for a png is 45 bytes
-  // so it makes sense to me to check for that.
-  if (get_file_size(f) < (long)45) {
-    invalid_png();
-    fclose(f);
-    return 1;
-  }
-
-  // Check the signature for a valid png file
-  if (get_sig(f) != 1) {
-    invalid_png();
-    fclose(f);
-    return 1;
-  }
-  printf("File %s has a valid png signature!\n", argv[1]);
-  CHUNK hdr_chunk = get_chunk(f);
-  if (hdr_chunk.length != 13 || (strcmp(hdr_chunk.type, "") == 0) ||
-      hdr_chunk.data == NULL) {
-    printf("Invalid IHDR.\n");
-    free_chunk_data(&hdr_chunk);
-    fclose(f);
-    return 1;
-  }
-  PNG_IHDR *hdr_data = hdr_chunk.data;
-  if (!verify_IHDR_data(hdr_data)) {
-    free_chunk_data(&hdr_chunk);
-    hdr_data = NULL;
-    fclose(f);
-    return 1;
-  }
-  hdr_data->pixel_format = get_pixel_format(hdr_data);
-  if (hdr_data->pixel_format == UNKNOWN) {
-    printf("Invalid color depth/bit depth combination.\n");
-    free_chunk_data(&hdr_chunk);
-    hdr_data = NULL;
-    fclose(f);
-    return 1;
-  }
-
-  CHUNK *chunks = (CHUNK *)calloc(1, sizeof(CHUNK));
-  // bool first_chunk = true;
-  // chunks[0] = get_chunk(f);
-  // print_chunk(&chunks[0]);
-  //
-  // chunks[1] = get_chunk(f);
-  // print_chunk(&chunks[1]);
-  int i = 0;
-  do {
-    if (i != 0) {
-      CHUNK *tmp;
-      tmp = (CHUNK *)realloc(chunks, ((size_t)(1 + i) * sizeof(CHUNK)));
-      if (!tmp) {
-        if (i == 1) {
-          free_chunk_data(chunks);
-          free(chunks);
-          chunks = NULL;
-          hdr_data = NULL;
-          free_chunk_data(&hdr_chunk);
-          fclose(f);
-          return 1;
-        }
-        if (i != 1) {
-          free_chunks(chunks, i);
-          chunks = NULL;
-          hdr_data = NULL;
-          free_chunk_data(&hdr_chunk);
-          fclose(f);
-          return 1;
-        }
-      }
-      chunks = tmp;
-    }
-    chunks[i] = get_chunk(f);
-    if (idat_start && (strcmp(chunks[i].type, "IDAT") != 0)) {
-      idat_end = true;
-    }
-    if (idat_end && (strcmp(chunks[i].type, "IDAT") == 0)) {
-      printf("Non-contiguous IDAT chunks detected.  Bad PNG\n");
-      free_chunks(chunks, i);
-      chunks = NULL;
-      hdr_data = NULL;
-      free_chunk_data(&hdr_chunk);
-      fclose(f);
-      return 1;
-    }
-    if (strcmp(chunks[i].type, "IDAT") == 0) {
-      idat_start = true;
-    }
-    i++;
-  } while (strcmp(chunks[i - 1].type, "IEND") != 0);
-  int num_chunks = i;
-
-  printf("Number of chunks: %d\n", i + 1);
-  printf("----------------\n");
-  print_chunk(&hdr_chunk);
-
-  for (i = 0; i < num_chunks; i++) {
-    print_chunk(&chunks[i]);
-  }
-
-  unsigned long num_bytes = 0L;
-  for (i = 0; i < num_chunks; i++) {
-    if (strcmp(chunks[i].type, "IDAT") == 0) {
-      num_bytes += chunks[i].length;
-    }
-  }
-  printf("num_bytes before concatenation: %lu\n", num_bytes);
-  unsigned char *compressed_data =
-      (unsigned char *)malloc(num_bytes * sizeof(char));
-  if (!compressed_data) {
-    printf("Error allocating data.\n");
-    free_chunks(chunks, num_chunks);
-    chunks = NULL;
-    hdr_data = NULL;
-    free_chunk_data(&hdr_chunk);
-    fclose(f);
-    return 1;
-  }
-  int offset = 0;
-  for (i = 0; i < num_chunks; i++) {
-    if (strcmp(chunks[i].type, "IDAT") != 0) {
-      continue;
-    }
-    memcpy(compressed_data + offset, chunks[i].data, chunks[i].length);
-    offset += chunks[i].length;
-  }
-  printf("Offset after concatenating compressed data: %d\n", offset);
-  // unsigned long expected_num_bytes = 0L;
-  // for (i = 0; i < num_chunks; i++) {
-  //   if (strcmp(chunks[i].type, "IDAT") == 0) {
-  //     expected_num_bytes += chunks[i].length;
-  //   }
-  // }
-
-  // printf("Expected compressed data length? %s\n",
-  //        expected_num_bytes == num_bytes ? "true" : "false");
-  // printf("Expected compressed data length: %lu\n", expected_num_bytes);
-  // printf("Actual compressed data length: %lu\n", num_bytes);
-
-  // printf("First two bytes of compressed stream: %x %x\n", compressed_data[0],
-  //        compressed_data[1]);
-  size_t out_size = 0;
-  uint8_t *out_data;
-  if (decompress_pixels(compressed_data, num_bytes, hdr_data, &out_data,
-                        &out_size) != Z_OK) {
-    printf("decompress_pixels failed\n");
-    free(compressed_data);
-    compressed_data = NULL;
-    free_chunks(chunks, num_chunks);
-    chunks = NULL;
-    hdr_data = NULL;
-    free_chunk_data(&hdr_chunk);
-    fclose(f);
-    return 1;
-  }
-
-  printf("Uncompressed data size: %zu\n", out_size);
-
-  free(compressed_data);
-  compressed_data = NULL;
-
-  printf("First filter byte: %02x\n", out_data[0]);
-
-  PIXEL *pixels = allocate_PIXELs(hdr_data);
-  if (!pixels) {
-    free(out_data);
-    out_data = NULL;
-    free_chunks(chunks, num_chunks);
-    chunks = NULL;
-    hdr_data = NULL;
-    free_chunk_data(&hdr_chunk);
-    fclose(f);
-    return 1;
-  }
-  printf("out_data before get_pixels: %p\n", out_data);
-  int pixel_result = get_pixels(&out_data, out_size, hdr_data, pixels);
-  if (pixel_result == 1) {
-    if (pixels) {
-      free(pixels);
-    }
-    if (out_data) {
-      free(out_data);
-    }
-    out_data = NULL;
-    free_chunks(chunks, num_chunks);
-    chunks = NULL;
-    hdr_data = NULL;
-    free_chunk_data(&hdr_chunk);
-    fclose(f);
-    return 1;
-  }
-  print_pixel(pixels[0]);
-
-  if (pixels) {
-    free(pixels);
-  }
-  if (out_data) {
-    free(out_data);
-  }
-  out_data = NULL;
-  free_chunks(chunks, num_chunks);
-  chunks = NULL;
-  hdr_data = NULL;
-  free_chunk_data(&hdr_chunk);
-  fclose(f);
-  printf("All clean!\n");
-  return 0;
 }
