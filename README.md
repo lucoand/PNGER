@@ -16,7 +16,9 @@ Object files and executable will be created in /build directory.  The /build dir
 
 This will remove the build directory allowing for a fresh build.
 
-If you prefer, you can use this command
+If you prefer, you can use this command, which will build pnger in the project root:
+
+> gcc -o pnger src/*.c -lX11 -lm -lz
 
 Made by Lucoa, using X11, zlib, and standard libraries.
 
