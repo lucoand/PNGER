@@ -8,11 +8,11 @@ Additionally, it currently only supports the X11 window manager.
 
 Included Makefile allows for simple compilation (assumes gcc compiler):
 
-* make
+> make
 
 Object files and executable will be created in /build directory.  The /build directory will be generated if not present.
 
-* make clean
+> make clean
 
 This will remove the build directory allowing for a fresh build.
 
