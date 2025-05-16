@@ -50,9 +50,6 @@ int main(int argc, char **argv) {
   XSetWMProtocols(d, w, &delWindow, 1);
 
   GC gc = XCreateGC(d, w, 0, NULL);
-  // XColor color;
-  // Colormap colormap = DefaultColormap(d, 0);
-  // XAllocNamedColor(d, colormap, "red", &color, &color);
   XImage *img = create_img(d, s, png);
   while (1) {
     XNextEvent(d, &e);

@@ -530,7 +530,7 @@ void test_uncompress(void) {
 int decompress_pixels(const unsigned char *compressed_data,
                       size_t compressed_size, PNG_IHDR *hdr, uint8_t **out_data,
                       size_t *out_size, size_t *bytes_per_row) {
-  if (!compressed_data || !hdr || !out_data || !out_size) {
+  if (!compressed_data || !hdr || !out_data || !out_size || !bytes_per_row) {
     printf("Null pointer passed to decompress pixels.\n");
     return -1;
   }
@@ -579,11 +579,11 @@ int get_RGBA_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
   // four bytes per pixel
   uint8_t *data = *out_data;
   size_t offset = hdr->width * 4 + 1;
-  for (int i = 0; i < hdr->height; i++) {
+  for (uint32_t i = 0; i < hdr->height; i++) {
     uint8_t filter_type = data[i * offset];
     switch (filter_type) {
     case 0:
-      for (int j = 0; j < hdr->width; j++) {
+      for (uint32_t j = 0; j < hdr->width; j++) {
         pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
         pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
         pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2];
@@ -591,7 +591,7 @@ int get_RGBA_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
       }
       break;
     case 1:
-      for (int j = 0; j < hdr->width; j++) {
+      for (uint32_t j = 0; j < hdr->width; j++) {
         if (j == 0) {
           pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
           pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
@@ -610,7 +610,7 @@ int get_RGBA_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
       }
       break;
     case 2:
-      for (int j = 0; j < hdr->width; j++) {
+      for (uint32_t j = 0; j < hdr->width; j++) {
         if (i == 0) {
           pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
           pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
@@ -629,7 +629,7 @@ int get_RGBA_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
       }
       break;
     case 4:
-      for (int j = 0; j < hdr->width; j++) {
+      for (uint32_t j = 0; j < hdr->width; j++) {
         if (i == 0 && j == 0) {
           pixels[0].r = data[1];
           pixels[0].g = data[2];
@@ -733,6 +733,129 @@ void free_PNG(PNG *p) {
   p->pixels = NULL;
   p->header = NULL;
   p = NULL;
+}
+
+bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
+                   size_t bytes_per_row) {
+  uint32_t bps; // bytes per sample, minimum 1 (for sample depth < 8 should still be
+           // fine)
+  uint32_t spp; // samples per pixel, minimum 1
+  uint8_t bd = hdr->bit_depth;
+  if (bd == 16) {
+    bps = 2;
+  } else {
+    bps = 1;
+  }
+
+  switch (hdr->pixel_format) {
+  case RGBA:
+    spp = 4;
+    break;
+  case GSA:
+    spp = 2;
+    break;
+  case RGB:
+    spp = 3;
+    break;
+  case PALETTE:
+  case GS:
+    spp = 1;
+    break;
+  default:
+    fprintf(stderr,
+            "Unknown pixel format.  This message probably shouldn't print.\n");
+    return false;
+    break;
+  }
+
+  for (uint32_t i = 0; i < hdr->height; i++) {
+    uint32_t f_offset = i * bytes_per_row;
+    uint32_t r_row_len = bytes_per_row - 1;
+    uint32_t r_offset = i * r_row_len;
+    uint8_t filter_type = out_data[f_offset];
+    switch (filter_type) {
+    case 0:
+      for (uint32_t j = 0; j < r_row_len; j++) {
+        raw_data[r_offset + j] = out_data[f_offset + j + 1];
+      }
+      break;
+    case 1:
+      for (uint32_t j = 0; j < r_row_len; j++) {
+        if (j < spp * bps) {
+          raw_data[r_offset + j] = out_data[f_offset + j + 1];
+          continue;
+        }
+        raw_data[r_offset + j] =
+            out_data[f_offset + j + 1] + raw_data[f_offset + j - (spp * bps)];
+      }
+      break;
+    case 2:
+      for (uint32_t j = 0; j < r_row_len; j++) {
+        if (i == 0) {
+          raw_data[r_offset + j] = out_data[f_offset + j + 1];
+          continue;
+        }
+        raw_data[r_offset + j] =
+            out_data[f_offset + j + 1] + raw_data[r_offset - r_row_len + j];
+      }
+      break;
+    case 3:
+      for (uint32_t j = 0; j < r_row_len; j++) {
+        if (i == 0 && j < spp * bps) {
+          raw_data[r_offset + j] = out_data[f_offset + j + 1];
+          continue;
+        }
+        if (i == 0) {
+          uint8_t average = raw_data[f_offset + j - (spp * bps)] >> 1;
+          raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
+          continue;
+        }
+        if (j < spp * bps) {
+          uint8_t average = raw_data[r_offset - r_row_len + j] >> 1;
+          raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
+          continue;
+        }
+        uint8_t average;
+        uint16_t a = (uint16_t)raw_data[r_offset - r_row_len + j];
+        uint16_t b = (uint16_t)raw_data[r_offset + j - (spp * bps)];
+        average = (uint8_t)((a + b) >> 1);
+        raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
+      }
+      break;
+    case 4:
+      for (uint32_t j = 0; j < r_row_len; j++) {
+        if (i == 0 && j < spp * bps) {
+          raw_data[r_offset + j] = out_data[f_offset + j + 1];
+          continue;
+        }
+        if (i == 0) {
+          // PaethPredictor(a, 0, 0) = a
+          uint8_t a = raw_data[r_offset + j - (spp * bps)];
+          raw_data[r_offset + j] = out_data[f_offset + j + 1] + a;
+          continue;
+        }
+        if (j < spp * bps) {
+          // PaethPredictor(0, b, 0) = b
+          uint8_t b = raw_data[r_offset - r_row_len + j];
+          raw_data[r_offset + j] = out_data[f_offset + j + 1] + b;
+          continue;
+        }
+        // PaethPredictor(left, up, up-left)
+        uint8_t left = raw_data[r_offset + j - (spp * bps)];
+        uint8_t up = raw_data[r_offset - r_row_len + j];
+        uint8_t up_left = raw_data[r_offset - r_row_len + j - (spp * bps)];
+        uint8_t p = out_data[f_offset + j + 1];
+        raw_data[r_offset + j] = p + PaethPredictor(left, up, up_left);
+      }
+      break;
+    default:
+      printf("Unsupported filter type for filter method 0.  This message "
+             "shouldn't appear.\n");
+      return false;
+      break;
+    }
+  }
+  return true;
 }
 
 PNG *decode_PNG(FILE *f) {
@@ -859,17 +982,34 @@ PNG *decode_PNG(FILE *f) {
     free_chunk_data(&hdr_chunk);
     return NULL;
   }
-
   // printf("Bytes per row: %zu\n", bytes_per_row);
   // printf("Uncompressed data size: %zu\n", out_size);
 
   free(compressed_data);
   compressed_data = NULL;
 
+  size_t raw_size = out_size - hdr_data->height;
+  uint8_t *raw_data = calloc(raw_size, 1);
+  if (!raw_data) {
+    printf("Error allocating raw_data.\n");
+    free(compressed_data);
+    compressed_data = NULL;
+    free_chunks(chunks, num_chunks);
+    chunks = NULL;
+    hdr_data = NULL;
+    free_chunk_data(&hdr_chunk);
+    return NULL;
+  }
+
+  // TODO: test this
+  // if (!unfilter_data(raw_data, out_data, hdr_data, bytes_per_row)) {
+  // }
   // printf("First filter byte: %02x\n", out_data[0]);
 
   PIXEL *pixels = allocate_PIXELs(hdr_data);
   if (!pixels) {
+    free(raw_data);
+    raw_data = NULL;
     free(out_data);
     out_data = NULL;
     free_chunks(chunks, num_chunks);
@@ -881,6 +1021,8 @@ PNG *decode_PNG(FILE *f) {
   // printf("out_data before get_pixels: %p\n", out_data);
   int pixel_result = get_pixels(&out_data, hdr_data, pixels);
   if (pixel_result == 1) {
+    free(raw_data);
+    raw_data = NULL;
     if (pixels) {
       free(pixels);
     }
@@ -898,6 +1040,8 @@ PNG *decode_PNG(FILE *f) {
 
   PNG *png = (PNG *)malloc(sizeof(PNG));
   if (!png) {
+    free(raw_data);
+    raw_data = NULL;
     if (pixels) {
       free(pixels);
     }
@@ -915,6 +1059,8 @@ PNG *decode_PNG(FILE *f) {
   png->header = hdr_data;
   png->pixels = pixels;
 
+  free(raw_data);
+  raw_data = NULL;
   if (out_data) {
     free(out_data);
   }

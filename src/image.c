@@ -31,8 +31,8 @@ XImage *create_img(Display *d, int screen, PNG *p) {
     return NULL;
   }
 
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
+  for (uint32_t y = 0; y < height; y++) {
+    for (uint32_t x = 0; x < width; x++) {
       unsigned long pixel;
       if (p->pixels[y * width + x].a == 0) {
         pixel = 0L;
@@ -44,6 +44,6 @@ XImage *create_img(Display *d, int screen, PNG *p) {
       // XPutPixel(img, x, y, 0xFF0000);
     }
   }
-  printf("image created.\n");
+  // printf("image created.\n");
   return img;
 }
