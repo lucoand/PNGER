@@ -591,13 +591,16 @@ uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c) {
 
 void get_RGBA_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGBA *pixels) {
   // four bytes per pixel
-  size_t offset = hdr->width * 4;
+  int bytes_per_pixel = 4;
+  size_t offset = hdr->width * bytes_per_pixel;
   for (uint32_t i = 0; i < hdr->height; i++) {
     for (uint32_t j = 0; j < hdr->width; j++) {
-      pixels[hdr->width * i + j].r = data[offset * i + j * 4];
-      pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1];
-      pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 2];
-      pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 3];
+      uint32_t pix_offset = hdr->width * i + j;
+      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
+      pixels[pix_offset].r = data[byte_offset];
+      pixels[pix_offset].g = data[byte_offset + 1];
+      pixels[pix_offset].b = data[byte_offset + 2];
+      pixels[pix_offset].a = data[byte_offset + 3];
     }
   }
 }
@@ -621,6 +624,38 @@ void get_RGBA16_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGBA16 *pixels) {
   }
 }
 
+void get_RGB_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGB *pixels) {
+  // three bytes per pixel
+  int bytes_per_pixel = 3;
+  size_t offset = hdr->width * bytes_per_pixel;
+  for (uint32_t i = 0; i < hdr->height; i++) {
+    for (uint32_t j = 0; j < hdr->width; j++) {
+      uint32_t pix_offset = hdr->width * i + j;
+      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
+      pixels[pix_offset].r = data[byte_offset];
+      pixels[pix_offset].g = data[byte_offset + 1];
+      pixels[pix_offset].b = data[byte_offset + 2];
+    }
+  }
+}
+
+void get_RGB16_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGB16 *pixels) {
+  int bytes_per_pixel = 6;
+  size_t offset = hdr->width * bytes_per_pixel;
+  for (uint32_t i = 0; i < hdr->height; i++) {
+    for (uint32_t j = 0; j < hdr->width; j++) {
+      uint32_t pix_offset = hdr->width * i + j;
+      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
+      uint16_t r = (uint16_t)data[byte_offset] << 8 | data[byte_offset + 1];
+      uint16_t g = (uint16_t)data[byte_offset + 2] << 8 | data[byte_offset + 3];
+      uint16_t b = (uint16_t)data[byte_offset + 4] << 8 | data[byte_offset + 5];
+      pixels[pix_offset].r = r;
+      pixels[pix_offset].g = g;
+      pixels[pix_offset].b = b;
+    }
+  }
+}
+
 bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
   if (!data || !hdr || !pixels) {
     fprintf(stderr, "Null pointer passed into get_pixels.\n");
@@ -639,6 +674,22 @@ bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
     }
     if (hdr->bit_depth == 16) {
       get_RGBA16_pixels(data, hdr, (PIXELRGBA16 *)pixels);
+      return true;
+    }
+    printf("Couldn't get pixels.  This message shouldn't appear.\n");
+    return false;
+    break;
+  case RGB:
+    if (hdr->bit_depth != 8 && hdr->bit_depth != 16) {
+      printf(
+          "Unsupported bit depth for RGB.  This message shouldn't appear.\n");
+    }
+    if (hdr->bit_depth == 8) {
+      get_RGB_pixels(data, hdr, (PIXELRGB *)pixels);
+      return true;
+    }
+    if (hdr->bit_depth == 16) {
+      get_RGB16_pixels(data, hdr, (PIXELRGB16 *)pixels);
       return true;
     }
     printf("Couldn't get pixels.  This message shouldn't appear.\n");
