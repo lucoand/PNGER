@@ -1,11 +1,18 @@
 #include "image.h"
 
+XImage *create_img(Display *d, int screen, PNG *p);
+
+void img_RGBA(XImage *img, uint32_t width, uint32_t height, PIXELRGBA *pixels);
+
 XImage *create_img(Display *d, int screen, PNG *p) {
   if (!d || !p) {
     return NULL;
   }
   uint32_t width = p->header->width;
   uint32_t height = p->header->height;
+  PixelFormat pixel_format = p->header->pixel_format;
+  uint8_t bit_depth = p->header->bit_depth;
+  void *pixels = p->pixels;
   size_t bytes_per_pixel;
   switch (p->header->pixel_format) {
   case RGBA:
@@ -31,19 +38,29 @@ XImage *create_img(Display *d, int screen, PNG *p) {
     return NULL;
   }
 
-  for (uint32_t y = 0; y < height; y++) {
-    for (uint32_t x = 0; x < width; x++) {
-      unsigned long pixel;
-      if (p->pixels[y * width + x].a == 0) {
-        pixel = 0L;
-      } else {
-        pixel = (p->pixels[y * width + x].r << 16) |
-                (p->pixels[y * width + x].g << 8) | p->pixels[y * width + x].b;
-      }
-      XPutPixel(img, x, y, pixel);
-      // XPutPixel(img, x, y, 0xFF0000);
-    }
+  if (bit_depth == 8 && pixel_format == RGBA) {
+    img_RGBA(img, width, height, (PIXELRGBA *)(pixels));
+  } else {
+    printf("Unsupported pixel format and bit depth\n");
+    XDestroyImage(img);
+    img = NULL;
+		return NULL;
   }
   // printf("image created.\n");
   return img;
+}
+
+void img_RGBA(XImage *img, uint32_t width, uint32_t height, PIXELRGBA *pixels) {
+  for (uint32_t y = 0; y < height; y++) {
+    for (uint32_t x = 0; x < width; x++) {
+      unsigned long pixel;
+      if (pixels[y * width + x].a == 0) {
+        pixel = 0L;
+      } else {
+        pixel = (pixels[y * width + x].r << 16) |
+                (pixels[y * width + x].g << 8) | pixels[y * width + x].b;
+      }
+      XPutPixel(img, x, y, pixel);
+    }
+  }
 }

@@ -51,6 +51,15 @@ int main(int argc, char **argv) {
 
   GC gc = XCreateGC(d, w, 0, NULL);
   XImage *img = create_img(d, s, png);
+  if (!img) {
+    printf("Error creating image.\n");
+    XFreeGC(d, gc);
+    XDestroyWindow(d, w);
+    XCloseDisplay(d);
+    free_PNG(png);
+    fclose(f);
+    return 1;
+  }
   while (1) {
     XNextEvent(d, &e);
     if (e.type == Expose) {

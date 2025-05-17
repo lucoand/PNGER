@@ -30,24 +30,38 @@ typedef struct {
   bool ancillary;
 } CHUNK;
 
-typedef struct {
-  uint16_t r;
-  uint16_t g;
-  uint16_t b;
-  uint16_t a;
-} PIXEL16;
-
 uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c);
 
-PIXEL *allocate_PIXELs(PNG_IHDR *hdr) {
-  size_t num_pixels = hdr->height * hdr->width;
-  PIXEL *pixels = calloc(num_pixels, sizeof(PIXEL));
-  if (!pixels) {
-    printf("Allocation error: pixels.\n");
-    return NULL;
-  }
-  return pixels;
-}
+// void *allocate_PIXELs(PNG_IHDR *hdr) {
+//   size_t num_pixels = hdr->height * hdr->width;
+//   size_t size;
+//   uint8_t bit_depth = hdr->bit_depth;
+//
+//   switch (hdr->pixel_format) {
+//   case RGBA:
+//     if (bit_depth == 8) {
+//       size = sizeof(PIXELRGBA);
+//       break;
+//     }
+//     if (bit_depth == 16) {
+//       size = sizeof(PIXELRGBA16);
+//       break;
+//     }
+//     printf("Incompatible bit depth %d for RGBA pixel format.\n", bit_depth);
+//     return NULL;
+//     break;
+//   case GSA:
+//     if (bit_depth == 8) {
+//     }
+//   }
+//
+//   void *pixels = calloc(num_pixels, size);
+//   if (!pixels) {
+//     printf("Allocation error: pixels.\n");
+//     return NULL;
+//   }
+//   return pixels;
+// }
 
 void make_crc_table(void) {
   unsigned long c;
@@ -575,147 +589,69 @@ uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c) {
   return c;
 }
 
-int get_RGBA_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
+void get_RGBA_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGBA *pixels) {
   // four bytes per pixel
-  uint8_t *data = *out_data;
-  size_t offset = hdr->width * 4 + 1;
+  size_t offset = hdr->width * 4;
   for (uint32_t i = 0; i < hdr->height; i++) {
-    uint8_t filter_type = data[i * offset];
-    switch (filter_type) {
-    case 0:
-      for (uint32_t j = 0; j < hdr->width; j++) {
-        pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
-        pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
-        pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2];
-        pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3];
-      }
-      break;
-    case 1:
-      for (uint32_t j = 0; j < hdr->width; j++) {
-        if (j == 0) {
-          pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
-          pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
-          pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2];
-          pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3];
-          continue;
-        }
-        pixels[hdr->width * i + j].r =
-            data[offset * i + j * 4 + 1] + pixels[hdr->width * i + j - 1].r;
-        pixels[hdr->width * i + j].g =
-            data[offset * i + j * 4 + 1 + 1] + pixels[hdr->width * i + j - 1].g;
-        pixels[hdr->width * i + j].b =
-            data[offset * i + j * 4 + 1 + 2] + pixels[hdr->width * i + j - 1].b;
-        pixels[hdr->width * i + j].a =
-            data[offset * i + j * 4 + 1 + 3] + pixels[hdr->width * i + j - 1].a;
-      }
-      break;
-    case 2:
-      for (uint32_t j = 0; j < hdr->width; j++) {
-        if (i == 0) {
-          pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1];
-          pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1];
-          pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2];
-          pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3];
-          continue;
-        }
-        pixels[hdr->width * i + j].r =
-            data[offset * i + j * 4 + 1] + pixels[hdr->width * (i - 1) + j].r;
-        pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1] +
-                                       pixels[hdr->width * (i - 1) + j].g;
-        pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2] +
-                                       pixels[hdr->width * (i - 1) + j].b;
-        pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3] +
-                                       pixels[hdr->width * (i - 1) + j].a;
-      }
-      break;
-    case 4:
-      for (uint32_t j = 0; j < hdr->width; j++) {
-        if (i == 0 && j == 0) {
-          pixels[0].r = data[1];
-          pixels[0].g = data[2];
-          pixels[0].b = data[3];
-          pixels[0].a = data[4];
-          continue;
-        }
-        if (i == 0) {
-          uint8_t pr = PaethPredictor(pixels[j - 1].r, 0, 0);
-          uint8_t pg = PaethPredictor(pixels[j - 1].g, 0, 0);
-          uint8_t pb = PaethPredictor(pixels[j - 1].b, 0, 0);
-          uint8_t pa = PaethPredictor(pixels[j - 1].a, 0, 0);
-          pixels[j].r = data[j * 4 + 1] + pr;
-          pixels[j].g = data[j * 4 + 1 + 1] + pg;
-          pixels[j].b = data[j * 4 + 1 + 2] + pb;
-          pixels[j].a = data[j * 4 + 1 + 3] + pa;
-          continue;
-        }
-        if (j == 0) {
-          uint8_t pr = PaethPredictor(0, pixels[hdr->width * (i - 1)].r, 0);
-          uint8_t pg = PaethPredictor(0, pixels[hdr->width * (i - 1)].g, 0);
-          uint8_t pb = PaethPredictor(0, pixels[hdr->width * (i - 1)].b, 0);
-          uint8_t pa = PaethPredictor(0, pixels[hdr->width * (i - 1)].a, 0);
-          pixels[hdr->width * i].r = data[offset * i + 1] + pr;
-          pixels[hdr->width * i].g = data[offset * i + 1 + 1] + pg;
-          pixels[hdr->width * i].b = data[offset * i + 1 + 2] + pb;
-          pixels[hdr->width * i].a = data[offset * i + 1 + 3] + pa;
-          continue;
-        }
-        uint8_t pr = PaethPredictor(pixels[hdr->width * i + j - 1].r,
-                                    pixels[hdr->width * (i - 1) + j].r,
-                                    pixels[hdr->width * (i - 1) + j - 1].r);
-        uint8_t pg = PaethPredictor(pixels[hdr->width * i + j - 1].g,
-                                    pixels[hdr->width * (i - 1) + j].g,
-                                    pixels[hdr->width * (i - 1) + j - 1].g);
-        uint8_t pb = PaethPredictor(pixels[hdr->width * i + j - 1].b,
-                                    pixels[hdr->width * (i - 1) + j].b,
-                                    pixels[hdr->width * (i - 1) + j - 1].b);
-        uint8_t pa = PaethPredictor(pixels[hdr->width * i + j - 1].a,
-                                    pixels[hdr->width * (i - 1) + j].a,
-                                    pixels[hdr->width * (i - 1) + j - 1].a);
-        pixels[hdr->width * i + j].r = data[offset * i + j * 4 + 1] + pr;
-        pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1 + 1] + pg;
-        pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 1 + 2] + pb;
-        pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 1 + 3] + pa;
-      }
-      break;
-    default:
-      printf("Filter type not yet implemented: %d\n", filter_type);
-      return 1;
-      break;
+    for (uint32_t j = 0; j < hdr->width; j++) {
+      pixels[hdr->width * i + j].r = data[offset * i + j * 4];
+      pixels[hdr->width * i + j].g = data[offset * i + j * 4 + 1];
+      pixels[hdr->width * i + j].b = data[offset * i + j * 4 + 2];
+      pixels[hdr->width * i + j].a = data[offset * i + j * 4 + 3];
     }
   }
-  return 0;
 }
 
-int get_pixels(uint8_t **out_data, PNG_IHDR *hdr, PIXEL *pixels) {
-  if (!out_data || !hdr || !pixels) {
+void get_RGBA16_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGBA16 *pixels) {
+  int bytes_per_pixel = 8;
+  size_t offset = hdr->width * bytes_per_pixel;
+  for (uint32_t i = 0; i < hdr->height; i++) {
+    for (uint32_t j = 0; j < hdr->width; j++) {
+      uint32_t pix_offset = hdr->width * i + j;
+      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
+      uint16_t r = (uint16_t)data[byte_offset] << 8 | data[byte_offset + 1];
+      uint16_t g = (uint16_t)data[byte_offset + 2] << 8 | data[byte_offset + 3];
+      uint16_t b = (uint16_t)data[byte_offset + 4] << 8 | data[byte_offset + 5];
+      uint16_t a = (uint16_t)data[byte_offset + 6] << 8 | data[byte_offset + 7];
+      pixels[pix_offset].r = r;
+      pixels[pix_offset].g = g;
+      pixels[pix_offset].b = b;
+      pixels[pix_offset].a = a;
+    }
+  }
+}
+
+bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
+  if (!data || !hdr || !pixels) {
     fprintf(stderr, "Null pointer passed into get_pixels.\n");
-    return 1;
+    return false;
   }
   switch (hdr->pixel_format) {
   case RGBA:
+    if (hdr->bit_depth != 8 && hdr->bit_depth != 16) {
+      printf(
+          "Unsupported bit depth for RGBA.  This message shouldn't appear.\n");
+      return false;
+    }
     if (hdr->bit_depth == 8) {
-      if (get_RGBA_pixels(out_data, hdr, pixels) == 0) {
-        return 0;
-      } else {
-        printf("Couldn't get pixels.\n");
-        return 1;
-      }
+      get_RGBA_pixels(data, hdr, (PIXELRGBA *)pixels);
+      return true;
     }
     if (hdr->bit_depth == 16) {
-      printf("Bit depth 16 RGBA not yet implemented.\n");
-      return 1;
+      get_RGBA16_pixels(data, hdr, (PIXELRGBA16 *)pixels);
+      return true;
     }
-    printf("Unsupported bit depth for RGBA.  This message shouldn't appear.\n");
-    return 1;
+    printf("Couldn't get pixels.  This message shouldn't appear.\n");
+    return false;
     break;
   default:
     printf("Pixel format not yet implemented: %d\n", hdr->pixel_format);
-    return 1;
+    return false;
     break;
   }
 }
 
-void print_pixel(PIXEL p) {
+void print_pixel(PIXELRGBA p) {
   printf("Pixel Data: ");
   printf("R=%02x G=%02x B=%02x A=%02x\n", p.r, p.g, p.b, p.a);
 }
@@ -737,8 +673,8 @@ void free_PNG(PNG *p) {
 
 bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
                    size_t bytes_per_row) {
-  uint32_t bps; // bytes per sample, minimum 1 (for sample depth < 8 should still be
-           // fine)
+  uint32_t bps; // bytes per sample, minimum 1 (for sample depth < 8 should
+                // still be fine)
   uint32_t spp; // samples per pixel, minimum 1
   uint8_t bd = hdr->bit_depth;
   if (bd == 16) {
@@ -786,7 +722,7 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
           continue;
         }
         raw_data[r_offset + j] =
-            out_data[f_offset + j + 1] + raw_data[f_offset + j - (spp * bps)];
+            out_data[f_offset + j + 1] + raw_data[r_offset + j - (spp * bps)];
       }
       break;
     case 2:
@@ -800,17 +736,22 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
       }
       break;
     case 3:
+      // printf("Average filter detected. TESTING.\n");
+      // return false;
+      // raw(x) = average + floor((raw(x-bpp)+prior(x))/2)
+      // printf("bytes per pixel = %d\n", spp * bps);
       for (uint32_t j = 0; j < r_row_len; j++) {
-        if (i == 0 && j < spp * bps) {
+        if (i == 0 && j < (spp * bps)) {
+          // first pixel -> raw(0) = average(0) + floor(0 + 0)
           raw_data[r_offset + j] = out_data[f_offset + j + 1];
           continue;
         }
         if (i == 0) {
-          uint8_t average = raw_data[f_offset + j - (spp * bps)] >> 1;
+          uint8_t average = raw_data[r_offset + j - (spp * bps)] >> 1;
           raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
           continue;
         }
-        if (j < spp * bps) {
+        if (j < (spp * bps)) {
           uint8_t average = raw_data[r_offset - r_row_len + j] >> 1;
           raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
           continue;
@@ -988,12 +929,17 @@ PNG *decode_PNG(FILE *f) {
   free(compressed_data);
   compressed_data = NULL;
 
+  /**
+   * Total number of bytes holding pixel data.
+   **/
   size_t raw_size = out_size - hdr_data->height;
   uint8_t *raw_data = calloc(raw_size, 1);
   if (!raw_data) {
     printf("Error allocating raw_data.\n");
-    free(compressed_data);
-    compressed_data = NULL;
+    if (out_data) {
+      free(out_data);
+    }
+    out_data = NULL;
     free_chunks(chunks, num_chunks);
     chunks = NULL;
     hdr_data = NULL;
@@ -1002,35 +948,42 @@ PNG *decode_PNG(FILE *f) {
   }
 
   // TODO: test this
-  // if (!unfilter_data(raw_data, out_data, hdr_data, bytes_per_row)) {
-  // }
-  // printf("First filter byte: %02x\n", out_data[0]);
-
-  PIXEL *pixels = allocate_PIXELs(hdr_data);
-  if (!pixels) {
+  if (!unfilter_data(raw_data, out_data, hdr_data, bytes_per_row)) {
+    printf("Error unfiltering decompressed data.\n");
     free(raw_data);
     raw_data = NULL;
-    free(out_data);
-    out_data = NULL;
+    if (out_data) {
+      free(out_data);
+      out_data = NULL;
+    }
     free_chunks(chunks, num_chunks);
     chunks = NULL;
     hdr_data = NULL;
     free_chunk_data(&hdr_chunk);
     return NULL;
   }
-  // printf("out_data before get_pixels: %p\n", out_data);
-  int pixel_result = get_pixels(&out_data, hdr_data, pixels);
-  if (pixel_result == 1) {
+  // printf("First filter byte: %02x\n", out_data[0]);
+  free(out_data);
+  out_data = NULL;
+
+  void *pixels = malloc(raw_size);
+  if (!pixels) {
     free(raw_data);
     raw_data = NULL;
+    free_chunks(chunks, num_chunks);
+    chunks = NULL;
+    hdr_data = NULL;
+    free_chunk_data(&hdr_chunk);
+    return NULL;
+  }
+
+  if (!get_pixels(raw_data, hdr_data, pixels)) {
     if (pixels) {
       free(pixels);
+      pixels = NULL;
     }
-    pixels = NULL;
-    if (out_data) {
-      free(out_data);
-    }
-    out_data = NULL;
+    free(raw_data);
+    raw_data = NULL;
     free_chunks(chunks, num_chunks);
     chunks = NULL;
     hdr_data = NULL;
@@ -1046,10 +999,6 @@ PNG *decode_PNG(FILE *f) {
       free(pixels);
     }
     pixels = NULL;
-    if (out_data) {
-      free(out_data);
-    }
-    out_data = NULL;
     free_chunks(chunks, num_chunks);
     chunks = NULL;
     hdr_data = NULL;
@@ -1058,13 +1007,10 @@ PNG *decode_PNG(FILE *f) {
   }
   png->header = hdr_data;
   png->pixels = pixels;
+  png->bytes_per_row = bytes_per_row;
 
   free(raw_data);
   raw_data = NULL;
-  if (out_data) {
-    free(out_data);
-  }
-  out_data = NULL;
   free_chunks(chunks, num_chunks);
   chunks = NULL;
   return png;
