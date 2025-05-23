@@ -1,6 +1,4 @@
-#include "main.h"
 #include "png.h"
-#include <stdint.h>
 
 float verticies[] = {
     // positions   // tex coords

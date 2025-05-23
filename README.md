@@ -17,7 +17,9 @@ THIS IS A WORK IN PROGRESS.  A variety of features are planned to be added:
 Using CMake (from project root):
 
 > mkdir build && cd build
+
 > cmake ..
+
 > make
 
 ### USAGE
