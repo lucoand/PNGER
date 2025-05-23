@@ -11,10 +11,15 @@ typedef enum {
   RGBA,
 } PixelFormat;
 
+typedef struct {
+  uint8_t r, g, b;
+} PLTE;
+
 /**
  * Holds IHDR chunk data. See https://www.rfc-editor.org/rfc/rfc2083#page-15
  */
 typedef struct {
+  PLTE *pal;
   uint32_t width;
   uint32_t height;
   PixelFormat pixel_format;
@@ -100,7 +105,7 @@ typedef struct {
 
 typedef struct {
   PNG_IHDR *header;
-  void *pixels;
+  uint8_t *pixels;
   size_t bytes_per_row;
 } PNG;
 

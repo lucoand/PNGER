@@ -1,25 +1,35 @@
 # PNGER
-v0.01
+v0.03
 
-A CLI png viewer project originally made for boot.dev
+A CLI png viewer for Linux made in C; project originally made for boot.dev
 
-Currently the application is quite limited.   I have only added support for 32 bit RGBA png files but more functionality is on the way.
-Additionally, it currently only supports the X11 window manager.
+Currently PNGER can display files created in RGB and RGBA modes, and supports both 8-bit and 16-bit (downsampled) pixel channels.
+I transitioned from X11 to OpenGL to allow for better alpha channel support.
 
-Included Makefile allows for simple compilation (assumes gcc compiler):
+THIS IS A WORK IN PROGRESS.  A variety of features are planned to be added:
+- Support for grayscale and pallete color modes.
+- Support for ancillary png chunks.
+- Opening different png files from within the application once loaded.
+- Actual GUI elements.
 
+## BUILD
+
+Using CMake (from project root):
+
+> mkdir build && cd build
+> cmake ..
 > make
 
-Object files and executable will be created in /build directory.  The /build directory will be generated if not present.
+### USAGE
 
-> make clean
+PNGER expects a single command line argument, and currently can only open the file it is provided:
 
-This will remove the build directory allowing for a fresh build.
+> ./pnger my_image.png
 
-If you prefer, you can use this command, which will build pnger in the project root:
+To close PNGER, press ESC.
 
-> gcc -o pnger src/*.c -lX11 -lm -lz
+For now, the file need not have a .png extension.  As long as the file is a valid png image, PNGER will at least attempt to open it.
 
-Made by Lucoa, using X11, zlib, and standard libraries.
+Made by Lucoa, using glfw, glad, zlib, and standard libraries.
 
 

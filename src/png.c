@@ -1,4 +1,6 @@
 #include "png.h"
+#include <stddef.h>
+#include <stdint.h>
 
 #define MAX_DATA_LEN 2147483647
 #define IHDR_LEN 13
@@ -448,7 +450,7 @@ bool verify_IHDR_data(PNG_IHDR *hdr) {
     return false;
   }
   if (hdr->interlace_method > 1) {
-    printf("Invalid filter method.\n");
+    printf("Invalid interlace method.\n");
     return false;
   }
   return true;
@@ -656,6 +658,60 @@ void get_RGB16_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGB16 *pixels) {
   }
 }
 
+/** This takes in the raw unfiltered data with bit depth 16
+ * and applies an srgb approximation to it before downsampling
+ * to 8 bit
+ */
+uint8_t *convert_16_to_8(uint8_t *data, size_t num_bytes, PixelFormat format) {
+  bool is_alpha = false;
+  size_t alpha = 0;
+  if (format == RGBA || format == GSA) {
+    is_alpha = true;
+  }
+  if (format == RGBA) {
+    alpha = 4;
+  } else if (format == GSA) {
+    alpha = 2;
+  }
+
+  uint8_t *new_data = malloc(num_bytes / 2);
+  // maps color to allow for good 16 bit approximation
+  for (size_t i = 0; i < num_bytes / 2; i++) {
+    uint16_t sample = (uint16_t)data[i * 2] << 8 | data[(i * 2) + 1];
+    if (is_alpha && i % alpha == alpha - 1) {
+      new_data[i] = sample / 257;
+      continue;
+    }
+    float linear = sample / 65535.0f;
+    float srgb = powf(linear, 1.0f / 2.2f);
+    new_data[i] = (uint8_t)roundf(srgb * 255.0f);
+  }
+  free(data);
+  return new_data;
+}
+
+void apply_srgb(uint8_t *pixels, size_t size, PixelFormat format) {
+  bool is_alpha = false;
+  size_t alpha = 0;
+  if (format == RGBA || format == GSA) {
+    is_alpha = true;
+  }
+  if (format == RGBA) {
+    alpha = 4;
+  } else if (format == GSA) {
+    alpha = 2;
+  }
+
+  for (int i = 0; i < size; i++) {
+    if (is_alpha && i % alpha == alpha - 1) {
+      continue;
+    }
+    float linear = pixels[i] / 255.0f;
+    float srgb = powf(linear, 1.0f / 2.2f);
+    pixels[i] = (uint8_t)roundf(srgb * 255.0f);
+  }
+}
+
 bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
   if (!data || !hdr || !pixels) {
     fprintf(stderr, "Null pointer passed into get_pixels.\n");
@@ -668,14 +724,14 @@ bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
           "Unsupported bit depth for RGBA.  This message shouldn't appear.\n");
       return false;
     }
-    if (hdr->bit_depth == 8) {
-      get_RGBA_pixels(data, hdr, (PIXELRGBA *)pixels);
-      return true;
-    }
-    if (hdr->bit_depth == 16) {
-      get_RGBA16_pixels(data, hdr, (PIXELRGBA16 *)pixels);
-      return true;
-    }
+    // if (hdr->bit_depth == 8) {
+    get_RGBA_pixels(data, hdr, (PIXELRGBA *)pixels);
+    return true;
+    // }
+    // if (hdr->bit_depth == 16) {
+    //   get_RGBA16_pixels(data, hdr, (PIXELRGBA16 *)pixels);
+    //   return true;
+    // }
     printf("Couldn't get pixels.  This message shouldn't appear.\n");
     return false;
     break;
@@ -684,14 +740,14 @@ bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
       printf(
           "Unsupported bit depth for RGB.  This message shouldn't appear.\n");
     }
-    if (hdr->bit_depth == 8) {
-      get_RGB_pixels(data, hdr, (PIXELRGB *)pixels);
-      return true;
-    }
-    if (hdr->bit_depth == 16) {
-      get_RGB16_pixels(data, hdr, (PIXELRGB16 *)pixels);
-      return true;
-    }
+    // if (hdr->bit_depth == 8) {
+    get_RGB_pixels(data, hdr, (PIXELRGB *)pixels);
+    return true;
+    // }
+    // if (hdr->bit_depth == 16) {
+    //   get_RGB16_pixels(data, hdr, (PIXELRGB16 *)pixels);
+    //   return true;
+    // }
     printf("Couldn't get pixels.  This message shouldn't appear.\n");
     return false;
     break;
@@ -700,6 +756,36 @@ bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
     return false;
     break;
   }
+}
+
+bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
+  // pixels should be an uninitialized pointer i think
+  if (!data || !hdr) {
+    fprintf(stderr, "Null pointer passed into get_pixels.\n");
+    return false;
+  }
+  uint8_t bit_depth = hdr->bit_depth;
+  switch (hdr->pixel_format) {
+  case RGB:
+  case RGBA:
+    if (bit_depth == 8 || bit_depth == 16) {
+      *pixels = data;
+      return true;
+    }
+    break;
+  case PALETTE:
+    printf("Pallate images not yet implemented.\n");
+    break;
+  case GS:
+  case GSA:
+    printf("Grayscale images not yet implemented.\n");
+    break;
+  default:
+    printf("Unknown pixel format.  This message probably shouldn't print.\n");
+    break;
+  }
+  free(data);
+  return false;
 }
 
 void print_pixel(PIXELRGBA p) {
@@ -761,12 +847,14 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
     uint32_t r_offset = i * r_row_len;
     uint8_t filter_type = out_data[f_offset];
     switch (filter_type) {
-    case 0:
+    case 0: // none-type filter (data just needs to be copied as is)
       for (uint32_t j = 0; j < r_row_len; j++) {
         raw_data[r_offset + j] = out_data[f_offset + j + 1];
       }
       break;
-    case 1:
+    case 1: // sub-type filter
+            //(first pixel data is copied as is, then add the raw unfiltered
+            // data from previous pixel to undo the sub filter)
       for (uint32_t j = 0; j < r_row_len; j++) {
         if (j < spp * bps) {
           raw_data[r_offset + j] = out_data[f_offset + j + 1];
@@ -776,7 +864,9 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
             out_data[f_offset + j + 1] + raw_data[r_offset + j - (spp * bps)];
       }
       break;
-    case 2:
+    case 2: // above-type filter
+            // (first pixel data copied as is, then add raw unfiltered
+            // data from previous row pixel to undo the filter)
       for (uint32_t j = 0; j < r_row_len; j++) {
         if (i == 0) {
           raw_data[r_offset + j] = out_data[f_offset + j + 1];
@@ -790,9 +880,9 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
       // printf("Average filter detected. TESTING.\n");
       // return false;
       // raw(x) = average + floor((raw(x-bpp)+prior(x))/2)
-      // printf("bytes per pixel = %d\n", spp * bps);
+      // printf("bytes per pixel = %d\n", spp);
       for (uint32_t j = 0; j < r_row_len; j++) {
-        if (i == 0 && j < (spp * bps)) {
+        if (i == 0 && j < spp * bps) {
           // first pixel -> raw(0) = average(0) + floor(0 + 0)
           raw_data[r_offset + j] = out_data[f_offset + j + 1];
           continue;
@@ -802,7 +892,7 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
           raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
           continue;
         }
-        if (j < (spp * bps)) {
+        if (j < (spp)) {
           uint8_t average = raw_data[r_offset - r_row_len + j] >> 1;
           raw_data[r_offset + j] = out_data[f_offset + j + 1] + average;
           continue;
@@ -851,13 +941,15 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
 }
 
 PNG *decode_PNG(FILE *f) {
-  if (get_file_size(f) < (long)45) {
+  if (get_file_size(f) < 45L) {
     invalid_png();
+    printf("File size below minimum possible png size.\n");
     return NULL;
   }
 
   // Check the signature for a valid png file
   if (get_sig(f) != 1) {
+    invalid_png();
     printf("Bad png signature.\n");
     return NULL;
   }
@@ -874,6 +966,16 @@ PNG *decode_PNG(FILE *f) {
     hdr_data = NULL;
     return NULL;
   }
+  hdr_data->pal = NULL;
+
+  // TODO: Add interlacing support
+  if (hdr_data->interlace_method != 0) {
+    printf("Interlaced png support not yet implemented.\n");
+    free_chunk_data(&hdr_chunk);
+    hdr_data = NULL;
+    return NULL;
+  }
+
   hdr_data->pixel_format = get_pixel_format(hdr_data);
   if (hdr_data->pixel_format == UNKNOWN) {
     printf("Invalid color depth/bit depth combination.\n");
@@ -998,7 +1100,6 @@ PNG *decode_PNG(FILE *f) {
     return NULL;
   }
 
-  // TODO: test this
   if (!unfilter_data(raw_data, out_data, hdr_data, bytes_per_row)) {
     printf("Error unfiltering decompressed data.\n");
     free(raw_data);
@@ -1017,9 +1118,39 @@ PNG *decode_PNG(FILE *f) {
   free(out_data);
   out_data = NULL;
 
-  void *pixels = malloc(raw_size);
-  if (!pixels) {
-    free(raw_data);
+  if (hdr_data->bit_depth == 16) {
+    raw_data = convert_16_to_8(raw_data, raw_size, hdr_data->pixel_format);
+    raw_size /= 2;
+  }
+
+  // void *pixels = malloc(raw_size);
+  // if (!pixels) {
+  //   free(raw_data);
+  //   raw_data = NULL;
+  //   free_chunks(chunks, num_chunks);
+  //   chunks = NULL;
+  //   hdr_data = NULL;
+  //   free_chunk_data(&hdr_chunk);
+  //   return NULL;
+  // }
+
+  // if (!get_pixels(raw_data, hdr_data, pixels)) {
+  //   if (pixels) {
+  //     free(pixels);
+  //     pixels = NULL;
+  //   }
+  //   free(raw_data);
+  //   raw_data = NULL;
+  //   free_chunks(chunks, num_chunks);
+  //   chunks = NULL;
+  //   hdr_data = NULL;
+  //   free_chunk_data(&hdr_chunk);
+  //   return NULL;
+  // }
+  uint8_t *pixels = NULL;
+  // get_pixels2 will allocate data for pixels if necessary.
+  if (!get_pixels2(raw_data, hdr_data, &pixels)) {
+    // free(raw_data);
     raw_data = NULL;
     free_chunks(chunks, num_chunks);
     chunks = NULL;
@@ -1027,25 +1158,15 @@ PNG *decode_PNG(FILE *f) {
     free_chunk_data(&hdr_chunk);
     return NULL;
   }
-
-  if (!get_pixels(raw_data, hdr_data, pixels)) {
-    if (pixels) {
-      free(pixels);
-      pixels = NULL;
-    }
-    free(raw_data);
-    raw_data = NULL;
-    free_chunks(chunks, num_chunks);
-    chunks = NULL;
-    hdr_data = NULL;
-    free_chunk_data(&hdr_chunk);
-    return NULL;
+  raw_data = NULL;
+  if (hdr_data->bit_depth != 16) {
+    apply_srgb(pixels, raw_size, hdr_data->pixel_format);
   }
 
   PNG *png = (PNG *)malloc(sizeof(PNG));
   if (!png) {
-    free(raw_data);
-    raw_data = NULL;
+    // free(raw_data);
+    // raw_data = NULL;
     if (pixels) {
       free(pixels);
     }
@@ -1060,8 +1181,8 @@ PNG *decode_PNG(FILE *f) {
   png->pixels = pixels;
   png->bytes_per_row = bytes_per_row;
 
-  free(raw_data);
-  raw_data = NULL;
+  // free(raw_data);
+  // raw_data = NULL;
   free_chunks(chunks, num_chunks);
   chunks = NULL;
   return png;
