@@ -767,6 +767,7 @@ bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
   uint8_t bit_depth = hdr->bit_depth;
   switch (hdr->pixel_format) {
   case RGB:
+  case GSA:
   case RGBA:
     if (bit_depth == 8 || bit_depth == 16) {
       *pixels = data;
@@ -777,8 +778,7 @@ bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
     printf("Pallate images not yet implemented.\n");
     break;
   case GS:
-  case GSA:
-    printf("Grayscale images not yet implemented.\n");
+    printf("Grayscale (color mode 0) images not yet implemented.\n");
     break;
   default:
     printf("Unknown pixel format.  This message probably shouldn't print.\n");

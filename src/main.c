@@ -1,3 +1,4 @@
+#include "main.h"
 #include "png.h"
 
 float verticies[] = {
@@ -198,6 +199,10 @@ int main(int argc, char **argv) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
                  GL_UNSIGNED_BYTE, png->pixels);
     break;
+  case GSA:
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG, width, height, 0, GL_RG,
+                 GL_UNSIGNED_BYTE, png->pixels);
+    break;
   default:
     fprintf(stderr,
             "Texture generation not yet implemented for color mode %d.\n",
@@ -209,10 +214,17 @@ int main(int argc, char **argv) {
     break;
   }
 
-  // uint8_t white_tex[] = {255, 255, 255, 255, 255, 0, 0,   255,
-  //                        0,   255, 0,   255, 0,   0, 255, 255};
-  // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-  //              white_tex);
+  switch (png->header->pixel_format) {
+  case GSA:
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_GREEN);
+  case GS:
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_RED);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+    break;
+  default:
+    break;
+  }
 
   GLenum err = glGetError();
   if (err != GL_NO_ERROR) {
