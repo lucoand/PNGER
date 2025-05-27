@@ -22,12 +22,16 @@ typedef struct {
   PLTE *pal;
   uint32_t width;
   uint32_t height;
+	uint32_t gamma; // gamma * 100000
   PixelFormat pixel_format;
   uint8_t bit_depth;
   uint8_t color_type;
   uint8_t compression_method;
   uint8_t filter_method;
   uint8_t interlace_method;
+	uint8_t num_pal;
+  bool has_plte;
+	bool has_gama;
 } PNG_IHDR;
 
 typedef struct {

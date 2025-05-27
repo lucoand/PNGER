@@ -1,6 +1,9 @@
 #include "png.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
 
 #define MAX_DATA_LEN 2147483647
 #define IHDR_LEN 13
@@ -17,8 +20,8 @@ bool idat_end = false;
  * Made to work with the get_chunk_length() function.
  * Field "len" is used to record the length of the chunk.
  * Field "valid" is set to true if the chunk has a proper length.
- * "valid" will be false if the length fails to be read properly or if the value
- * exceeds MAX_DATA_LEN, as per the png spec.
+ * "valid" will be false if the length fails to be read properly or if the
+ * value exceeds MAX_DATA_LEN, as per the png spec.
  */
 typedef struct {
   uint32_t len;
@@ -33,6 +36,11 @@ typedef struct {
 } CHUNK;
 
 uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c);
+void get_pass_dimensions(uint32_t *height, uint32_t *width, PNG_IHDR *hdr,
+                         uint32_t start_x, uint32_t start_y, uint32_t step_x,
+                         uint32_t step_y);
+size_t get_pass_buf_size(PNG_IHDR *hdr, uint32_t start_x, uint32_t start_y,
+                         uint32_t step_x, uint32_t step_y);
 
 // void *allocate_PIXELs(PNG_IHDR *hdr) {
 //   size_t num_pixels = hdr->height * hdr->width;
@@ -263,20 +271,22 @@ CHUNK get_chunk(FILE *fp) {
     chunk.length = 0;
     return chunk;
   }
-  // printf("buf after get_chunk_type: %p\n", buf);
-  // char *t = get_chunk_type(&buf);
-  // if (!t) {
-  //   invalid_png();
-  //   free(original);
-  //   buf = NULL;
-  //   original = NULL;
-  //   chunk.length = 0;
-  //   return chunk;
-  // }
-  //
-  // memcpy(chunk.type, t, 5);
-  // free(t);
-  // t = NULL;
+  if (strcmp(chunk.type, "gAMA") == 0) {
+    uint32_t *gama = calloc(1, sizeof(uint32_t));
+    if (!gama) {
+      free(original);
+      buf = NULL;
+      original = NULL;
+      return chunk;
+    }
+    memcpy(gama, buf, sizeof(uint32_t));
+    *gama = ntohl(*gama);
+    chunk.data = gama;
+    free(original);
+    original = NULL;
+    buf = NULL;
+    return chunk;
+  }
 
   if ((chunk.type[0] & PROPERTY_BIT) == PROPERTY_BIT) {
     chunk.ancillary = true;
@@ -301,6 +311,34 @@ CHUNK get_chunk(FILE *fp) {
     get_IHDR(&buf, hdr);
 
     chunk.data = hdr;
+    free(original);
+    original = NULL;
+    buf = NULL;
+    return chunk;
+  }
+
+  if (strcmp(chunk.type, "PLTE") == 0 && chunk.length % 3 != 0 &&
+      chunk.length != 0) {
+    printf("ERROR: Invalid PLTE chunk length.\n");
+    free(original);
+    buf = NULL;
+    original = NULL;
+    chunk.length = 0;
+    return chunk;
+  }
+  if (strcmp(chunk.type, "PLTE") == 0) {
+    int num_plte = chunk.length / 3;
+    PLTE *plte = (PLTE *)calloc((size_t)num_plte, sizeof(PLTE));
+    if (!plte) {
+      printf("Error allocating memory\n");
+      free(original);
+      buf = NULL;
+      original = NULL;
+      chunk.length = 0;
+      return chunk;
+    }
+    memcpy(plte, buf, (size_t)chunk.length);
+    chunk.data = plte;
     free(original);
     original = NULL;
     buf = NULL;
@@ -484,15 +522,11 @@ size_t get_buffer_size(uint32_t height, uint32_t width, uint8_t bit_depth,
   size_t buffer_size;
   switch (pixel_format) {
   case GS:
+  case PALETTE:
     samples_per_pixel = 1;
     break;
   case RGB:
     samples_per_pixel = 3;
-    break;
-  case PALETTE:
-    *bytes_per_row = width + 1;
-    buffer_size = height * (width + 1);
-    return buffer_size;
     break;
   case GSA:
     samples_per_pixel = 2;
@@ -550,8 +584,24 @@ int decompress_pixels(const unsigned char *compressed_data,
     printf("Null pointer passed to decompress pixels.\n");
     return -1;
   }
-  size_t buffer_size = get_buffer_size(hdr->height, hdr->width, hdr->bit_depth,
-                                       hdr->pixel_format, bytes_per_row);
+  size_t buffer_size = 0;
+  if (hdr->interlace_method == 0) {
+    buffer_size = get_buffer_size(hdr->height, hdr->width, hdr->bit_depth,
+                                  hdr->pixel_format, bytes_per_row);
+  } else if (hdr->interlace_method == 1) {
+    // TODO:
+    printf("Decompress interlace.\n");
+    buffer_size = get_pass_buf_size(hdr, 0, 0, 8, 8);
+    buffer_size += get_pass_buf_size(hdr, 4, 0, 8, 8);
+    buffer_size += get_pass_buf_size(hdr, 0, 4, 4, 8);
+    buffer_size += get_pass_buf_size(hdr, 2, 0, 4, 4);
+    buffer_size += get_pass_buf_size(hdr, 0, 2, 2, 4);
+    buffer_size += get_pass_buf_size(hdr, 1, 0, 2, 2);
+    buffer_size += get_pass_buf_size(hdr, 0, 1, 1, 2);
+  } else {
+    printf("Unknown interlace method detected.\n");
+    return -1;
+  }
   *out_data = malloc(buffer_size);
   if (!*out_data) {
     fprintf(stderr, "malloc failed for buffer size %zu\n", buffer_size);
@@ -678,6 +728,9 @@ uint8_t *convert_16_to_8(uint8_t *data, size_t num_bytes, PixelFormat format) {
   // maps color to allow for good 16 bit approximation
   for (size_t i = 0; i < num_bytes / 2; i++) {
     uint16_t sample = (uint16_t)data[i * 2] << 8 | data[(i * 2) + 1];
+    // TEST: disabling srgb conversion for now
+    new_data[i] = sample / 257;
+    continue;
     if (is_alpha && i % alpha == alpha - 1) {
       new_data[i] = sample / 257;
       continue;
@@ -690,25 +743,28 @@ uint8_t *convert_16_to_8(uint8_t *data, size_t num_bytes, PixelFormat format) {
   return new_data;
 }
 
-void apply_srgb(uint8_t *pixels, size_t size, PixelFormat format) {
-  bool is_alpha = false;
-  size_t alpha = 0;
-  if (format == RGBA || format == GSA) {
-    is_alpha = true;
-  }
-  if (format == RGBA) {
-    alpha = 4;
-  } else if (format == GSA) {
-    alpha = 2;
-  }
+static inline float srgb_encode(float linear) {
+  if (linear <= 0.0031308f)
+    return 12.92f * linear;
+  else
+    return 1.055f * powf(linear, 1.0f / 2.4f) - 0.055f;
+}
 
-  for (int i = 0; i < size; i++) {
-    if (is_alpha && i % alpha == alpha - 1) {
+void apply_srgb(uint8_t *pixels, size_t size, PixelFormat format) {
+  bool is_alpha = format == RGBA || format == GSA;
+  size_t alpha_stride = (format == RGBA) ? 4 : (format == GSA) ? 2 : 0;
+  for (int i = 0; i < 16; i++) {
+    printf("%02X ", pixels[i]);
+  }
+  puts("");
+
+  for (size_t i = 0; i < size; i++) {
+    if (is_alpha && i % alpha_stride == alpha_stride - 1) {
       continue;
     }
     float linear = pixels[i] / 255.0f;
-    float srgb = powf(linear, 1.0f / 2.2f);
-    pixels[i] = (uint8_t)roundf(srgb * 255.0f);
+    float encoded = srgb_encode(linear);
+    pixels[i] = (uint8_t)roundf(encoded * 255.0f);
   }
 }
 
@@ -758,6 +814,159 @@ bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
   }
 }
 
+static inline uint8_t replicate_bits(uint8_t val, int bit_depth) {
+  switch (bit_depth) {
+  case 1:
+    return val ? 0xFF : 0x00;
+  case 2:
+    return (val << 6) | (val << 4) | (val << 2) | val;
+  case 4:
+    return (val << 4) | val;
+  default:
+    return val;
+  }
+}
+
+bool upscale_to_8(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
+  if (!data || !hdr || !pixels) {
+    printf("Null pointer passed to upscale_to_8.\n");
+    return false;
+  }
+  size_t num_bytes = 3 * (size_t)hdr->width * (size_t)hdr->height;
+  *pixels = (uint8_t *)malloc(num_bytes);
+  if (!*pixels) {
+    printf("Error allocating pixels for upscale_to_8.\n");
+    return false;
+  }
+  int samples_per_byte;
+  int bd_index;
+  uint8_t mask;
+  if (hdr->bit_depth == 4) {
+    samples_per_byte = 2;
+    bd_index = 2;
+    mask = 0b00001111;
+  } else if (hdr->bit_depth == 2) {
+    samples_per_byte = 4;
+    bd_index = 1;
+    mask = 0b00000011;
+  } else if (hdr->bit_depth == 1) {
+    samples_per_byte = 8;
+    bd_index = 0;
+    mask = 0b00000001;
+  } else {
+    printf("Unexpected bit depth for upscaling grayscale pixels: %d.  This "
+           "message probably shouldn't print.\n",
+           hdr->bit_depth);
+    free(*pixels);
+    return false;
+  }
+  int num_data_bytes_in_row =
+      (int)ceil((double)hdr->width / (double)samples_per_byte);
+  // int index_of_last_data_byte_in_row = num_data_bytes_in_row - 1;
+  // int num_pixels_in_last_byte = hdr->width % samples_per_byte;
+  int end = samples_per_byte;
+  for (uint32_t i = 0; i < hdr->height; i++) {
+    uint32_t row_offset = i * hdr->width;
+    uint32_t data_row_offset = i * num_data_bytes_in_row;
+    for (uint32_t j = 0, m = 0; j < hdr->width; j += samples_per_byte, m++) {
+      // bool is_last_byte = (m == index_of_last_data_byte_in_row);
+      // if (is_last_byte && num_pixels_in_last_byte != 0) {
+      //   end = num_pixels_in_last_byte;
+      // } else {
+      //   end = samples_per_byte;
+      // }
+      int pixels_remaining = hdr->width - j;
+      int end = pixels_remaining < samples_per_byte ? pixels_remaining
+                                                    : samples_per_byte;
+      for (uint32_t k = 0; k < end; k++) {
+        int shift_multiplier = samples_per_byte - 1 - k;
+        int shift_amount = hdr->bit_depth * shift_multiplier;
+        uint8_t sub_byte = (data[data_row_offset + m] >> shift_amount) & mask;
+        uint8_t px = replicate_bits(sub_byte, hdr->bit_depth);
+        // float linear = px / 255.0f;
+        // uint8_t srgb = (uint8_t)roundf(srgb_encode(linear) * 255.0f);
+        (*pixels)[(row_offset + j + k) * 3] = px;
+        (*pixels)[(row_offset + j + k) * 3 + 1] = px;
+        (*pixels)[(row_offset + j + k) * 3 + 2] = px;
+        // printf("%3u ", px);
+      }
+      // printf("\n");
+    }
+  }
+  free(data);
+  return true;
+}
+
+bool upscale_to_8_plte(uint8_t **data, PNG_IHDR *hdr) {
+  if (!data || !hdr) {
+    printf("Null pointer passed to upscale_to_8_plte.\n");
+    return false;
+  }
+  size_t num_bytes = (size_t)hdr->width * (size_t)hdr->height;
+  uint8_t *new_data = (uint8_t *)malloc(num_bytes);
+  if (!new_data) {
+    printf("Error allocating pallate for upscale_to_8_plte.\n");
+    return false;
+  }
+  int samples_per_byte;
+  int bd_index;
+  uint8_t mask;
+  if (hdr->bit_depth == 4) {
+    samples_per_byte = 2;
+    bd_index = 2;
+    mask = 0b00001111;
+  } else if (hdr->bit_depth == 2) {
+    samples_per_byte = 4;
+    bd_index = 1;
+    mask = 0b00000011;
+  } else if (hdr->bit_depth == 1) {
+    samples_per_byte = 8;
+    bd_index = 0;
+    mask = 0b00000001;
+  } else {
+    printf("Unexpected bit depth for upscaling grayscale pixels: %d.  This "
+           "message probably shouldn't print.\n",
+           hdr->bit_depth);
+    free(new_data);
+    return false;
+  }
+  int num_data_bytes_in_row =
+      (int)ceil((double)hdr->width / (double)samples_per_byte);
+  // int index_of_last_data_byte_in_row = num_data_bytes_in_row - 1;
+  // int num_pixels_in_last_byte = hdr->width % samples_per_byte;
+  int end = samples_per_byte;
+  for (uint32_t i = 0; i < hdr->height; i++) {
+    uint32_t row_offset = i * hdr->width;
+    uint32_t data_row_offset = i * num_data_bytes_in_row;
+    for (uint32_t j = 0, m = 0; j < hdr->width; j += samples_per_byte, m++) {
+      // bool is_last_byte = (m == index_of_last_data_byte_in_row);
+      // if (is_last_byte && num_pixels_in_last_byte != 0) {
+      //   end = num_pixels_in_last_byte;
+      // } else {
+      //   end = samples_per_byte;
+      // }
+      int pixels_remaining = hdr->width - j;
+      int end = pixels_remaining < samples_per_byte ? pixels_remaining
+                                                    : samples_per_byte;
+      for (uint32_t k = 0; k < end; k++) {
+        int shift_multiplier = samples_per_byte - 1 - k;
+        int shift_amount = hdr->bit_depth * shift_multiplier;
+        uint8_t sub_byte =
+            ((*data)[data_row_offset + m] >> shift_amount) & mask;
+        // uint8_t px = replicate_bits(sub_byte, hdr->bit_depth);
+        // float linear = px / 255.0f;
+        // uint8_t srgb = (uint8_t)roundf(srgb_encode(linear) * 255.0f);
+        new_data[row_offset + j + k] = sub_byte;
+        // printf("%3u ", px);
+      }
+      // printf("\n");
+    }
+  }
+  free(*data);
+  *data = new_data;
+  return true;
+}
+
 bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
   // pixels should be an uninitialized pointer i think
   if (!data || !hdr) {
@@ -767,18 +976,91 @@ bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
   uint8_t bit_depth = hdr->bit_depth;
   switch (hdr->pixel_format) {
   case RGB:
-  case GSA:
   case RGBA:
     if (bit_depth == 8 || bit_depth == 16) {
       *pixels = data;
       return true;
     }
+    fprintf(stderr,
+            "Unsupported bit depth %d for color mode %d.  This message "
+            "probably shouldn't print.\n",
+            hdr->bit_depth, hdr->color_type);
     break;
   case PALETTE:
-    printf("Pallate images not yet implemented.\n");
+    *pixels = (uint8_t *)malloc(hdr->width * hdr->height * 3);
+    if (!*pixels) {
+      fprintf(stderr, "Error allocating pixels.\n");
+      break;
+    }
+    if (bit_depth == 4 || bit_depth == 2 || bit_depth == 1) {
+      if (!upscale_to_8_plte(&data, hdr)) {
+        free(*pixels);
+        break;
+      }
+    }
+    PLTE *pal = hdr->pal;
+    for (size_t y = 0; y < hdr->height; y++) {
+      size_t offset = y * hdr->width;
+      for (size_t x = 0; x < hdr->width; x++) {
+        uint8_t pal_idx = data[offset + x];
+        size_t px_offset = (offset + x) * 3;
+        (*pixels)[px_offset] = pal[pal_idx].r;
+        (*pixels)[px_offset + 1] = pal[pal_idx].g;
+        (*pixels)[px_offset + 2] = pal[pal_idx].b;
+      }
+    }
+    free(data);
+    return true;
+    break;
+  case GSA:
+    *pixels = (uint8_t *)malloc(hdr->width * hdr->height * 4);
+    if (!*pixels) {
+      fprintf(stderr, "Error allocating pixels.\n");
+      break;
+    }
+    for (uint32_t y = 0; y < hdr->height; y++) {
+      uint32_t offset = y * hdr->width * 2;
+      for (uint32_t x = 0; x < (hdr->width * 2); x += 2) {
+        uint32_t px_offset = (y * hdr->width + x / 2) * 4;
+        (*pixels)[px_offset] = data[offset + x];
+        (*pixels)[px_offset + 1] = data[offset + x];
+        (*pixels)[px_offset + 2] = data[offset + x];
+        (*pixels)[px_offset + 3] = data[offset + x + 1];
+        // printf("Transparency value %02x\n", (*pixels)[px_offset + 3]);
+      }
+    }
+    free(data);
+    return true;
     break;
   case GS:
-    printf("Grayscale (color mode 0) images not yet implemented.\n");
+    if (bit_depth == 8 || bit_depth == 16) {
+      *pixels = (uint8_t *)malloc(hdr->width * hdr->height * 3);
+      if (!*pixels) {
+        fprintf(stderr, "Error allocating pixels.\n");
+        break;
+      }
+      for (uint32_t y = 0; y < hdr->height; y++) {
+        uint32_t offset = y * hdr->width;
+        for (uint32_t x = 0; x < hdr->width; x++) {
+          uint32_t px_offset = (offset + x) * 3;
+          (*pixels)[px_offset] = data[offset + x];
+          (*pixels)[px_offset + 1] = data[offset + x];
+          (*pixels)[px_offset + 2] = data[offset + x];
+        }
+      }
+      free(data);
+      return true;
+    }
+    if (bit_depth == 4 || bit_depth == 2 || bit_depth == 1) {
+      if (!upscale_to_8(data, hdr, pixels)) {
+        break;
+      }
+      return true;
+    }
+    fprintf(stderr,
+            "Unsupported bit depth %d for color mode %d.  This message "
+            "probably shouldn't print.\n",
+            hdr->bit_depth, hdr->color_type);
     break;
   default:
     printf("Unknown pixel format.  This message probably shouldn't print.\n");
@@ -846,6 +1128,7 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
     uint32_t r_row_len = bytes_per_row - 1;
     uint32_t r_offset = i * r_row_len;
     uint8_t filter_type = out_data[f_offset];
+    // printf("Filter type = %d\n", filter_type);
     switch (filter_type) {
     case 0: // none-type filter (data just needs to be copied as is)
       for (uint32_t j = 0; j < r_row_len; j++) {
@@ -940,6 +1223,88 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
   return true;
 }
 
+void get_pass_dimensions(uint32_t *height, uint32_t *width, PNG_IHDR *hdr,
+                         uint32_t start_x, uint32_t start_y, uint32_t step_x,
+                         uint32_t step_y) {
+  *height = (hdr->height - start_y + step_y - 1) / step_y;
+  *width = (hdr->width - start_x + step_x - 1) / step_x;
+}
+
+//** Use for decompressing interlaced data ONLY.
+size_t get_pass_buf_size(PNG_IHDR *hdr, uint32_t start_x, uint32_t start_y,
+                         uint32_t step_x, uint32_t step_y) {
+  uint32_t height;
+  uint32_t width;
+  get_pass_dimensions(&height, &width, hdr, start_x, start_y, step_x, step_y);
+  if (height != 0 && width != 0) {
+    size_t *bytes_per_row; // throwaway
+    size_t pass_num_bytes = get_buffer_size(height, width, hdr->bit_depth,
+                                            hdr->pixel_format, bytes_per_row);
+    return pass_num_bytes;
+  }
+  return 0;
+}
+
+bool unfilter_interlace(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
+                        size_t bytes_per_row) {
+  // TODO:
+  if (!raw_data || !out_data || !hdr) {
+    fprintf(stderr, "NULL pointer passed to unfilter_interlace().\n");
+    return false;
+  }
+  printf("Unfilter interlace start\n");
+  uint8_t *out_data_ptr = out_data;
+  uint8_t bit_depth = hdr->bit_depth;
+  PixelFormat pf = hdr->pixel_format;
+  size_t pass_1_bytes_per_row;
+  uint32_t pass_1_height;
+  uint32_t pass_1_width;
+  uint32_t pass_1_num_bytes = 0;
+  uint8_t *pass_1_out_data = NULL;
+
+  get_pass_dimensions(&pass_1_height, &pass_1_width, hdr, 0, 0, 8, 8);
+  if (pass_1_height != 0 && pass_1_width != 0) {
+    pass_1_num_bytes = (uint32_t)get_buffer_size(
+        pass_1_height, pass_1_width, bit_depth, pf, &pass_1_bytes_per_row);
+    pass_1_out_data = (uint8_t *)malloc((size_t)pass_1_num_bytes);
+    if (!pass_1_out_data) {
+      return false;
+    }
+    memcpy(pass_1_out_data, out_data_ptr, (size_t)pass_1_num_bytes);
+    out_data_ptr += pass_1_num_bytes;
+  }
+  // unfilter_data needs a PNG_IHDR* with bit_depth, pixel_format, and height
+  uint8_t *pass_1_raw_data = NULL;
+  if (pass_1_out_data != NULL) {
+    printf("unfiltering pass 1\n");
+    PNG_IHDR p1hdr;
+    p1hdr.bit_depth = bit_depth;
+    p1hdr.pixel_format = pf;
+    p1hdr.height = pass_1_height;
+    pass_1_raw_data = malloc(pass_1_num_bytes - pass_1_height);
+    if (!pass_1_raw_data) {
+      free(pass_1_out_data);
+      fprintf(stderr, "Error allocating memory for pass_1_out_data.\n");
+      return false;
+    }
+    if (!unfilter_data(pass_1_raw_data, pass_1_out_data, &p1hdr,
+                       pass_1_bytes_per_row)) {
+      free(pass_1_raw_data);
+      free(pass_1_out_data);
+      fprintf(stderr, "Error unfiltering pass 1 interlace data.\n");
+      return false;
+    }
+    free(pass_1_out_data);
+    pass_1_bytes_per_row--;
+    printf("Interlace pass 1 unfiltered.\n");
+  }
+  if (pass_1_raw_data) {
+    free(pass_1_raw_data);
+  }
+  printf("Interlace png unfiltering not yet implemented.\n");
+  return false;
+}
+
 PNG *decode_PNG(FILE *f) {
   if (get_file_size(f) < 45L) {
     invalid_png();
@@ -967,6 +1332,8 @@ PNG *decode_PNG(FILE *f) {
     return NULL;
   }
   hdr_data->pal = NULL;
+  hdr_data->has_plte = false;
+  hdr_data->has_gama = false;
 
   // TODO: Add interlacing support
   if (hdr_data->interlace_method != 0) {
@@ -1010,6 +1377,72 @@ PNG *decode_PNG(FILE *f) {
       chunks = tmp;
     }
     chunks[i] = get_chunk(f);
+    if (idat_start && (strcmp(chunks[i].type, "PLTE") == 0)) {
+      printf("ERROR: PLTE chunk detected after IDAT chunks.\n");
+      free_chunks(chunks, i);
+      chunks = NULL;
+      hdr_data = NULL;
+      free_chunk_data(&hdr_chunk);
+      return NULL;
+    }
+    if (strcmp(chunks[i].type, "gAMA") == 0 && hdr_data->has_gama == true) {
+      printf("ERROR: Multiple gAMA chunks detected.\n");
+      free_chunks(chunks, i);
+      chunks = NULL;
+      hdr_data = NULL;
+      free_chunk_data(&hdr_chunk);
+      return NULL;
+    }
+    if (strcmp(chunks[i].type, "gAMA") == 0 && hdr_data->has_plte == true) {
+      printf("ERROR: gAMA chunk must be placed before PLTE data.\n");
+      free_chunks(chunks, i);
+      chunks = NULL;
+      hdr_data = NULL;
+      free_chunk_data(&hdr_chunk);
+      return NULL;
+    }
+    if (strcmp(chunks[i].type, "gAMA") == 0 && idat_start == true) {
+      printf("ERROR: gAMA chunk must be placed before IDAT data.\n");
+      free_chunks(chunks, i);
+      chunks = NULL;
+      hdr_data = NULL;
+      free_chunk_data(&hdr_chunk);
+      return NULL;
+    }
+    if (strcmp(chunks[i].type, "gAMA") == 0) {
+      hdr_data->has_gama = true;
+      hdr_data->gamma = *(uint32_t *)chunks[i].data;
+    }
+    if (strcmp(chunks[i].type, "PLTE") == 0 &&
+        (hdr_data->color_type == 0 || hdr_data->color_type == 4)) {
+      printf("ERROR: PLTE chunk detected in grayscale png.\n");
+      free_chunks(chunks, i);
+      chunks = NULL;
+      hdr_data = NULL;
+      free_chunk_data(&hdr_chunk);
+      return NULL;
+    }
+    if (strcmp(chunks[i].type, "PLTE") == 0 && hdr_data->has_plte == true) {
+      printf("ERROR: Multiple PLTE chunks detected.\n");
+      free_chunks(chunks, i);
+      chunks = NULL;
+      hdr_data = NULL;
+      free_chunk_data(&hdr_chunk);
+      return NULL;
+    }
+    if (strcmp(chunks[i].type, "PLTE") == 0) {
+      hdr_data->has_plte = true;
+      hdr_data->num_pal = chunks[i].length / 3;
+      if (hdr_data->num_pal > (uint8_t)pow(2, hdr_data->bit_depth)) {
+        printf("ERROR: Too many PLTE entries for bit depth!\n");
+        free_chunks(chunks, i);
+        chunks = NULL;
+        hdr_data = NULL;
+        free_chunk_data(&hdr_chunk);
+        return NULL;
+      }
+      hdr_data->pal = chunks[i].data;
+    }
     if (idat_start && (strcmp(chunks[i].type, "IDAT") != 0)) {
       idat_end = true;
     }
@@ -1026,15 +1459,15 @@ PNG *decode_PNG(FILE *f) {
     }
     i++;
   } while (strcmp(chunks[i - 1].type, "IEND") != 0);
+  if (hdr_data->color_type == 3 && hdr_data->has_plte == false) {
+    printf("ERROR: Color type 3 png must have a PLTE chunk!\n");
+    free_chunks(chunks, i);
+    chunks = NULL;
+    hdr_data = NULL;
+    free_chunk_data(&hdr_chunk);
+    return NULL;
+  }
   int num_chunks = i;
-
-  // printf("Number of chunks: %d\n", i + 1);
-  // printf("----------------\n");
-  // print_chunk(&hdr_chunk);
-
-  // for (i = 0; i < num_chunks; i++) {
-  //   print_chunk(&chunks[i]);
-  // }
 
   unsigned long num_bytes = 0L;
   for (i = 0; i < num_chunks; i++) {
@@ -1042,7 +1475,6 @@ PNG *decode_PNG(FILE *f) {
       num_bytes += chunks[i].length;
     }
   }
-  // printf("num_bytes before concatenation: %lu\n", num_bytes);
   unsigned char *compressed_data =
       (unsigned char *)malloc(num_bytes * sizeof(char));
   if (!compressed_data) {
@@ -1061,7 +1493,6 @@ PNG *decode_PNG(FILE *f) {
     memcpy(compressed_data + offset, chunks[i].data, chunks[i].length);
     offset += chunks[i].length;
   }
-  // printf("Offset after concatenating compressed data: %d\n", offset);
   size_t out_size = 0;
   size_t bytes_per_row = 0;
   uint8_t *out_data;
@@ -1076,8 +1507,6 @@ PNG *decode_PNG(FILE *f) {
     free_chunk_data(&hdr_chunk);
     return NULL;
   }
-  // printf("Bytes per row: %zu\n", bytes_per_row);
-  // printf("Uncompressed data size: %zu\n", out_size);
 
   free(compressed_data);
   compressed_data = NULL;
@@ -1086,6 +1515,7 @@ PNG *decode_PNG(FILE *f) {
    * Total number of bytes holding pixel data.
    **/
   size_t raw_size = out_size - hdr_data->height;
+  // TODO: fix raw_size for interlaced data...
   uint8_t *raw_data = calloc(raw_size, 1);
   if (!raw_data) {
     printf("Error allocating raw_data.\n");
@@ -1100,8 +1530,16 @@ PNG *decode_PNG(FILE *f) {
     return NULL;
   }
 
-  if (!unfilter_data(raw_data, out_data, hdr_data, bytes_per_row)) {
-    printf("Error unfiltering decompressed data.\n");
+  bool unfiltered = false;
+
+  if (hdr_data->interlace_method == 0) {
+    unfiltered = unfilter_data(raw_data, out_data, hdr_data, bytes_per_row);
+  } else if (hdr_data->interlace_method == 1) {
+    // TODO:
+    unfiltered =
+        unfilter_interlace(raw_data, out_data, hdr_data, bytes_per_row);
+  } else {
+    fprintf(stderr, "Unsupported interlace method.\n");
     free(raw_data);
     raw_data = NULL;
     if (out_data) {
@@ -1114,7 +1552,22 @@ PNG *decode_PNG(FILE *f) {
     free_chunk_data(&hdr_chunk);
     return NULL;
   }
-  // printf("First filter byte: %02x\n", out_data[0]);
+
+  if (!unfiltered) {
+    fprintf(stderr, "Error unfiltering decompressed data.\n");
+    fflush(stderr);
+    free(raw_data);
+    raw_data = NULL;
+    if (out_data) {
+      free(out_data);
+      out_data = NULL;
+    }
+    free_chunks(chunks, num_chunks);
+    chunks = NULL;
+    hdr_data = NULL;
+    free_chunk_data(&hdr_chunk);
+    return NULL;
+  }
   free(out_data);
   out_data = NULL;
 
@@ -1123,34 +1576,10 @@ PNG *decode_PNG(FILE *f) {
     raw_size /= 2;
   }
 
-  // void *pixels = malloc(raw_size);
-  // if (!pixels) {
-  //   free(raw_data);
-  //   raw_data = NULL;
-  //   free_chunks(chunks, num_chunks);
-  //   chunks = NULL;
-  //   hdr_data = NULL;
-  //   free_chunk_data(&hdr_chunk);
-  //   return NULL;
-  // }
-
-  // if (!get_pixels(raw_data, hdr_data, pixels)) {
-  //   if (pixels) {
-  //     free(pixels);
-  //     pixels = NULL;
-  //   }
-  //   free(raw_data);
-  //   raw_data = NULL;
-  //   free_chunks(chunks, num_chunks);
-  //   chunks = NULL;
-  //   hdr_data = NULL;
-  //   free_chunk_data(&hdr_chunk);
-  //   return NULL;
-  // }
   uint8_t *pixels = NULL;
   // get_pixels2 will allocate data for pixels if necessary.
+  // it also frees raw_data (if necessary), even on failure
   if (!get_pixels2(raw_data, hdr_data, &pixels)) {
-    // free(raw_data);
     raw_data = NULL;
     free_chunks(chunks, num_chunks);
     chunks = NULL;
@@ -1159,14 +1588,9 @@ PNG *decode_PNG(FILE *f) {
     return NULL;
   }
   raw_data = NULL;
-  if (hdr_data->bit_depth != 16) {
-    apply_srgb(pixels, raw_size, hdr_data->pixel_format);
-  }
 
   PNG *png = (PNG *)malloc(sizeof(PNG));
   if (!png) {
-    // free(raw_data);
-    // raw_data = NULL;
     if (pixels) {
       free(pixels);
     }
@@ -1181,8 +1605,6 @@ PNG *decode_PNG(FILE *f) {
   png->pixels = pixels;
   png->bytes_per_row = bytes_per_row;
 
-  // free(raw_data);
-  // raw_data = NULL;
   free_chunks(chunks, num_chunks);
   chunks = NULL;
   return png;

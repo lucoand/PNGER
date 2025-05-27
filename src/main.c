@@ -32,9 +32,19 @@ static const char *fragment_shader_text =
     "uniform sampler2D tex;\n"
     "void main()\n"
     "{\n"
+    "    vec4 color = texture(tex, vec2(TexCoord.x, 1.0 - TexCoord.y));\n"
+    "    color.rgb = pow(color.rgb, vec3(1.0 / 2.2));\n"
+    "    FragColor = color;\n"
+    "}\n";
+
+static const char *fragment_shader_text_no_gama =
+    "#version 330 core\n"
+    "in vec2 TexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D tex;\n"
+    "void main()\n"
+    "{\n"
     "    FragColor = texture(tex, vec2(TexCoord.x, 1.0 - TexCoord.y));\n"
-    // "    FragColor = vec4(1.0, 1.0, 0.0, 1.0);\n"
-    // "FragColor = vec4(TexCoord, 0.0, 1.0);\n"
     "}\n";
 
 static void error_callback(int error, const char *description) {
@@ -119,9 +129,15 @@ int main(int argc, char **argv) {
   }
 
   const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragment_shader, 1, &fragment_shader_text, NULL);
+
+  if (png->header->pixel_format == PALETTE || png->header->has_gama == false || png->header->gamma == 45455) {
+    glShaderSource(fragment_shader, 1, &fragment_shader_text_no_gama, NULL);
+  } else {
+    glShaderSource(fragment_shader, 1, &fragment_shader_text, NULL);
+  }
+
   glCompileShader(fragment_shader);
-  glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &compiled);
+  glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &compiled);
   if (!compiled) {
     char buf[512];
     glGetShaderInfoLog(fragment_shader, sizeof(buf), NULL, buf);
@@ -148,8 +164,6 @@ int main(int argc, char **argv) {
     free_PNG(png);
     exit(EXIT_FAILURE);
   }
-
-  // glEnable(GL_TEXTURE_2D);
 
   glDeleteShader(vertex_shader);
   glDeleteShader(fragment_shader);
@@ -192,15 +206,20 @@ int main(int argc, char **argv) {
 
   switch (png->header->pixel_format) {
   case RGBA:
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, png->pixels);
     break;
   case RGB:
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
+  case PALETTE:
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB,
                  GL_UNSIGNED_BYTE, png->pixels);
     break;
   case GSA:
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG, width, height, 0, GL_RG,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, png->pixels);
+    break;
+  case GS:
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB,
                  GL_UNSIGNED_BYTE, png->pixels);
     break;
   default:
@@ -211,18 +230,6 @@ int main(int argc, char **argv) {
     glfwTerminate();
     free_PNG(png);
     exit(EXIT_FAILURE);
-    break;
-  }
-
-  switch (png->header->pixel_format) {
-  case GSA:
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_GREEN);
-  case GS:
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_RED);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
-    break;
-  default:
     break;
   }
 
@@ -237,17 +244,19 @@ int main(int argc, char **argv) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   }
 
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+  GLint fb = 0;
+
   while (!glfwWindowShouldClose(window)) {
     glfwGetFramebufferSize(window, &width, &height);
 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, width, height);
-    // glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-
+    glUseProgram(program);
     glBindVertexArray(vao);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
-    glUseProgram(program);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
     glfwSwapBuffers(window);
