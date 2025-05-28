@@ -42,36 +42,12 @@ void get_pass_dimensions(uint32_t *height, uint32_t *width, PNG_IHDR *hdr,
 size_t get_pass_buf_size(PNG_IHDR *hdr, uint32_t start_x, uint32_t start_y,
                          uint32_t step_x, uint32_t step_y);
 
-// void *allocate_PIXELs(PNG_IHDR *hdr) {
-//   size_t num_pixels = hdr->height * hdr->width;
-//   size_t size;
-//   uint8_t bit_depth = hdr->bit_depth;
-//
-//   switch (hdr->pixel_format) {
-//   case RGBA:
-//     if (bit_depth == 8) {
-//       size = sizeof(PIXELRGBA);
-//       break;
-//     }
-//     if (bit_depth == 16) {
-//       size = sizeof(PIXELRGBA16);
-//       break;
-//     }
-//     printf("Incompatible bit depth %d for RGBA pixel format.\n", bit_depth);
-//     return NULL;
-//     break;
-//   case GSA:
-//     if (bit_depth == 8) {
-//     }
-//   }
-//
-//   void *pixels = calloc(num_pixels, size);
-//   if (!pixels) {
-//     printf("Allocation error: pixels.\n");
-//     return NULL;
-//   }
-//   return pixels;
-// }
+void free_IHDR(PNG_IHDR *hdr) {
+  if (!hdr) {
+    return;
+  }
+  free(hdr);
+}
 
 void make_crc_table(void) {
   unsigned long c;
@@ -480,15 +456,15 @@ bool verify_IHDR_data(PNG_IHDR *hdr) {
     return false;
   }
   if (hdr->compression_method != 0) {
-    printf("Invalid compression method.\n");
+    printf("Unknown compression method.\n");
     return false;
   }
   if (hdr->filter_method != 0) {
-    printf("Invalid filter method.\n");
+    printf("Unknown filter method.\n");
     return false;
   }
   if (hdr->interlace_method > 1) {
-    printf("Invalid interlace method.\n");
+    printf("Unknown interlace method.\n");
     return false;
   }
   return true;
@@ -641,73 +617,6 @@ uint8_t PaethPredictor(uint8_t a, uint8_t b, uint8_t c) {
   return c;
 }
 
-void get_RGBA_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGBA *pixels) {
-  // four bytes per pixel
-  int bytes_per_pixel = 4;
-  size_t offset = hdr->width * bytes_per_pixel;
-  for (uint32_t i = 0; i < hdr->height; i++) {
-    for (uint32_t j = 0; j < hdr->width; j++) {
-      uint32_t pix_offset = hdr->width * i + j;
-      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
-      pixels[pix_offset].r = data[byte_offset];
-      pixels[pix_offset].g = data[byte_offset + 1];
-      pixels[pix_offset].b = data[byte_offset + 2];
-      pixels[pix_offset].a = data[byte_offset + 3];
-    }
-  }
-}
-
-void get_RGBA16_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGBA16 *pixels) {
-  int bytes_per_pixel = 8;
-  size_t offset = hdr->width * bytes_per_pixel;
-  for (uint32_t i = 0; i < hdr->height; i++) {
-    for (uint32_t j = 0; j < hdr->width; j++) {
-      uint32_t pix_offset = hdr->width * i + j;
-      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
-      uint16_t r = (uint16_t)data[byte_offset] << 8 | data[byte_offset + 1];
-      uint16_t g = (uint16_t)data[byte_offset + 2] << 8 | data[byte_offset + 3];
-      uint16_t b = (uint16_t)data[byte_offset + 4] << 8 | data[byte_offset + 5];
-      uint16_t a = (uint16_t)data[byte_offset + 6] << 8 | data[byte_offset + 7];
-      pixels[pix_offset].r = r;
-      pixels[pix_offset].g = g;
-      pixels[pix_offset].b = b;
-      pixels[pix_offset].a = a;
-    }
-  }
-}
-
-void get_RGB_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGB *pixels) {
-  // three bytes per pixel
-  int bytes_per_pixel = 3;
-  size_t offset = hdr->width * bytes_per_pixel;
-  for (uint32_t i = 0; i < hdr->height; i++) {
-    for (uint32_t j = 0; j < hdr->width; j++) {
-      uint32_t pix_offset = hdr->width * i + j;
-      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
-      pixels[pix_offset].r = data[byte_offset];
-      pixels[pix_offset].g = data[byte_offset + 1];
-      pixels[pix_offset].b = data[byte_offset + 2];
-    }
-  }
-}
-
-void get_RGB16_pixels(uint8_t *data, PNG_IHDR *hdr, PIXELRGB16 *pixels) {
-  int bytes_per_pixel = 6;
-  size_t offset = hdr->width * bytes_per_pixel;
-  for (uint32_t i = 0; i < hdr->height; i++) {
-    for (uint32_t j = 0; j < hdr->width; j++) {
-      uint32_t pix_offset = hdr->width * i + j;
-      uint32_t byte_offset = offset * i + j * bytes_per_pixel;
-      uint16_t r = (uint16_t)data[byte_offset] << 8 | data[byte_offset + 1];
-      uint16_t g = (uint16_t)data[byte_offset + 2] << 8 | data[byte_offset + 3];
-      uint16_t b = (uint16_t)data[byte_offset + 4] << 8 | data[byte_offset + 5];
-      pixels[pix_offset].r = r;
-      pixels[pix_offset].g = g;
-      pixels[pix_offset].b = b;
-    }
-  }
-}
-
 /** This takes in the raw unfiltered data with bit depth 16
  * and applies an srgb approximation to it before downsampling
  * to 8 bit
@@ -728,16 +637,7 @@ uint8_t *convert_16_to_8(uint8_t *data, size_t num_bytes, PixelFormat format) {
   // maps color to allow for good 16 bit approximation
   for (size_t i = 0; i < num_bytes / 2; i++) {
     uint16_t sample = (uint16_t)data[i * 2] << 8 | data[(i * 2) + 1];
-    // TEST: disabling srgb conversion for now
     new_data[i] = sample / 257;
-    continue;
-    if (is_alpha && i % alpha == alpha - 1) {
-      new_data[i] = sample / 257;
-      continue;
-    }
-    float linear = sample / 65535.0f;
-    float srgb = powf(linear, 1.0f / 2.2f);
-    new_data[i] = (uint8_t)roundf(srgb * 255.0f);
   }
   free(data);
   return new_data;
@@ -765,52 +665,6 @@ void apply_srgb(uint8_t *pixels, size_t size, PixelFormat format) {
     float linear = pixels[i] / 255.0f;
     float encoded = srgb_encode(linear);
     pixels[i] = (uint8_t)roundf(encoded * 255.0f);
-  }
-}
-
-bool get_pixels(uint8_t *data, PNG_IHDR *hdr, void *pixels) {
-  if (!data || !hdr || !pixels) {
-    fprintf(stderr, "Null pointer passed into get_pixels.\n");
-    return false;
-  }
-  switch (hdr->pixel_format) {
-  case RGBA:
-    if (hdr->bit_depth != 8 && hdr->bit_depth != 16) {
-      printf(
-          "Unsupported bit depth for RGBA.  This message shouldn't appear.\n");
-      return false;
-    }
-    // if (hdr->bit_depth == 8) {
-    get_RGBA_pixels(data, hdr, (PIXELRGBA *)pixels);
-    return true;
-    // }
-    // if (hdr->bit_depth == 16) {
-    //   get_RGBA16_pixels(data, hdr, (PIXELRGBA16 *)pixels);
-    //   return true;
-    // }
-    printf("Couldn't get pixels.  This message shouldn't appear.\n");
-    return false;
-    break;
-  case RGB:
-    if (hdr->bit_depth != 8 && hdr->bit_depth != 16) {
-      printf(
-          "Unsupported bit depth for RGB.  This message shouldn't appear.\n");
-    }
-    // if (hdr->bit_depth == 8) {
-    get_RGB_pixels(data, hdr, (PIXELRGB *)pixels);
-    return true;
-    // }
-    // if (hdr->bit_depth == 16) {
-    //   get_RGB16_pixels(data, hdr, (PIXELRGB16 *)pixels);
-    //   return true;
-    // }
-    printf("Couldn't get pixels.  This message shouldn't appear.\n");
-    return false;
-    break;
-  default:
-    printf("Pixel format not yet implemented: %d\n", hdr->pixel_format);
-    return false;
-    break;
   }
 }
 
@@ -862,19 +716,11 @@ bool upscale_to_8(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
   }
   int num_data_bytes_in_row =
       (int)ceil((double)hdr->width / (double)samples_per_byte);
-  // int index_of_last_data_byte_in_row = num_data_bytes_in_row - 1;
-  // int num_pixels_in_last_byte = hdr->width % samples_per_byte;
   int end = samples_per_byte;
   for (uint32_t i = 0; i < hdr->height; i++) {
     uint32_t row_offset = i * hdr->width;
     uint32_t data_row_offset = i * num_data_bytes_in_row;
     for (uint32_t j = 0, m = 0; j < hdr->width; j += samples_per_byte, m++) {
-      // bool is_last_byte = (m == index_of_last_data_byte_in_row);
-      // if (is_last_byte && num_pixels_in_last_byte != 0) {
-      //   end = num_pixels_in_last_byte;
-      // } else {
-      //   end = samples_per_byte;
-      // }
       int pixels_remaining = hdr->width - j;
       int end = pixels_remaining < samples_per_byte ? pixels_remaining
                                                     : samples_per_byte;
@@ -883,14 +729,10 @@ bool upscale_to_8(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
         int shift_amount = hdr->bit_depth * shift_multiplier;
         uint8_t sub_byte = (data[data_row_offset + m] >> shift_amount) & mask;
         uint8_t px = replicate_bits(sub_byte, hdr->bit_depth);
-        // float linear = px / 255.0f;
-        // uint8_t srgb = (uint8_t)roundf(srgb_encode(linear) * 255.0f);
         (*pixels)[(row_offset + j + k) * 3] = px;
         (*pixels)[(row_offset + j + k) * 3 + 1] = px;
         (*pixels)[(row_offset + j + k) * 3 + 2] = px;
-        // printf("%3u ", px);
       }
-      // printf("\n");
     }
   }
   free(data);
@@ -932,19 +774,11 @@ bool upscale_to_8_plte(uint8_t **data, PNG_IHDR *hdr) {
   }
   int num_data_bytes_in_row =
       (int)ceil((double)hdr->width / (double)samples_per_byte);
-  // int index_of_last_data_byte_in_row = num_data_bytes_in_row - 1;
-  // int num_pixels_in_last_byte = hdr->width % samples_per_byte;
   int end = samples_per_byte;
   for (uint32_t i = 0; i < hdr->height; i++) {
     uint32_t row_offset = i * hdr->width;
     uint32_t data_row_offset = i * num_data_bytes_in_row;
     for (uint32_t j = 0, m = 0; j < hdr->width; j += samples_per_byte, m++) {
-      // bool is_last_byte = (m == index_of_last_data_byte_in_row);
-      // if (is_last_byte && num_pixels_in_last_byte != 0) {
-      //   end = num_pixels_in_last_byte;
-      // } else {
-      //   end = samples_per_byte;
-      // }
       int pixels_remaining = hdr->width - j;
       int end = pixels_remaining < samples_per_byte ? pixels_remaining
                                                     : samples_per_byte;
@@ -953,13 +787,8 @@ bool upscale_to_8_plte(uint8_t **data, PNG_IHDR *hdr) {
         int shift_amount = hdr->bit_depth * shift_multiplier;
         uint8_t sub_byte =
             ((*data)[data_row_offset + m] >> shift_amount) & mask;
-        // uint8_t px = replicate_bits(sub_byte, hdr->bit_depth);
-        // float linear = px / 255.0f;
-        // uint8_t srgb = (uint8_t)roundf(srgb_encode(linear) * 255.0f);
         new_data[row_offset + j + k] = sub_byte;
-        // printf("%3u ", px);
       }
-      // printf("\n");
     }
   }
   free(*data);
@@ -1026,7 +855,6 @@ bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
         (*pixels)[px_offset + 1] = data[offset + x];
         (*pixels)[px_offset + 2] = data[offset + x];
         (*pixels)[px_offset + 3] = data[offset + x + 1];
-        // printf("Transparency value %02x\n", (*pixels)[px_offset + 3]);
       }
     }
     free(data);
@@ -1070,11 +898,6 @@ bool get_pixels2(uint8_t *data, PNG_IHDR *hdr, uint8_t **pixels) {
   return false;
 }
 
-void print_pixel(PIXELRGBA p) {
-  printf("Pixel Data: ");
-  printf("R=%02x G=%02x B=%02x A=%02x\n", p.r, p.g, p.b, p.a);
-}
-
 void free_PNG(PNG *p) {
   if (!p) {
     return;
@@ -1082,11 +905,9 @@ void free_PNG(PNG *p) {
   if (p->pixels) {
     free(p->pixels);
   }
-  if (p->header) {
-    free(p->header);
-  }
-  p->pixels = NULL;
+  free_IHDR(p->header);
   p->header = NULL;
+  p->pixels = NULL;
   p = NULL;
 }
 
@@ -1128,7 +949,6 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
     uint32_t r_row_len = bytes_per_row - 1;
     uint32_t r_offset = i * r_row_len;
     uint8_t filter_type = out_data[f_offset];
-    // printf("Filter type = %d\n", filter_type);
     switch (filter_type) {
     case 0: // none-type filter (data just needs to be copied as is)
       for (uint32_t j = 0; j < r_row_len; j++) {
@@ -1160,10 +980,7 @@ bool unfilter_data(uint8_t *raw_data, uint8_t *out_data, PNG_IHDR *hdr,
       }
       break;
     case 3:
-      // printf("Average filter detected. TESTING.\n");
-      // return false;
       // raw(x) = average + floor((raw(x-bpp)+prior(x))/2)
-      // printf("bytes per pixel = %d\n", spp);
       for (uint32_t j = 0; j < r_row_len; j++) {
         if (i == 0 && j < spp * bps) {
           // first pixel -> raw(0) = average(0) + floor(0 + 0)
@@ -1606,6 +1423,7 @@ PNG *decode_PNG(FILE *f) {
   png->bytes_per_row = bytes_per_row;
 
   free_chunks(chunks, num_chunks);
+  png->header->pal = NULL;
   chunks = NULL;
   return png;
 }
